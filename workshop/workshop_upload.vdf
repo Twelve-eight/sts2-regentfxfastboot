@@ -1,0 +1,51 @@
+"workshopitem"
+{
+	"appid"		"2868840"
+	"contentfolder"		"G:\\omp works\\sts2-regentfxfastboot\\workshop\\content"
+	"previewfile"		"G:\\omp works\\sts2-regentfxfastboot\\workshop\\preview.png"
+	"visibility"		"0"
+	"title"		"RegentFX Fast Boot (万象辉星启动加速)"
+	"description"		"[h1]RegentFX Fast Boot(万象辉星启动加速)[/h1]
+
+消除 RegentFX(万象辉星)在启动阶段的 4 秒同步阻塞,把同样的场景缓存预热改到主菜单空闲帧里逐帧完成.
+
+[i]Removes RegentFX's ~4-second synchronous boot stall and re-warms the same scene cache frame-by-frame during idle main-menu time instead.[/i]
+
+[hr]
+
+[h2]它解决什么问题[/h2]
+
+实测(2026-09-11, 39 个 mod 环境):RegentFX v0.5.1 在 mod 初始化阶段同步预加载 32 个特效场景,单独占用 4.1 秒 - 是启动黑屏/间歇性未响应的最大单一来源.
+
+本 mod:
+[list]
+[*]跳过 RegentFX 的同步预加载(补丁在 RegentFX 初始化之前生效,与 mod 加载顺序无关)
+[*]NGame 构造后,把同样的场景清单以每帧一个的速度在后台预热进 RegentFX 自己的缓存
+[*]效果完全一致:进第一场战斗前缓存就是热的;预热失败的场景自动回落到 RegentFX 原生的懒加载路径,特效永不丢失
+[/list]
+
+[h2]使用方法[/h2]
+
+[list]
+[*]订阅本 mod 与 [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3747497501]RegentFX[/url]
+[*]无需任何操作,启动即生效
+[*]未安装 RegentFX 时本 mod 自动休眠,零副作用
+[/list]
+
+[hr]
+
+[h2]前置依赖[/h2]
+
+[list]
+[*][b]必须[/b]:[url=https://steamcommunity.com/sharedfiles/filedetails/?id=3737335127]BaseLib[/url]
+[*][b]配合[/b]:[url=https://steamcommunity.com/sharedfiles/filedetails/?id=3747497501]RegentFX[/url]
+[/list]
+
+[b]重要 - BaseLib 版本提示[/b]
+
+创意工坊的 BaseLib 更新经常落后于官方 GitHub.游戏版本更新后,如果工坊版 BaseLib 报错或本 mod 无法加载,请前往 GitHub 下载最新版:
+[list]
+[*][url=https://github.com/Alchyr/BaseLib-StS2/releases]GitHub Releases(推荐)[/url] - 最新正式版
+[*]安装方法:下载 zip,解压到 [code]Slay the Spire 2/mods/[/code],并[b]取消订阅工坊版 BaseLib[/b](避免双加载)
+[/list]"
+}
