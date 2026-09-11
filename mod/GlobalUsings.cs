@@ -1,2 +1,2 @@
-// Project-wide usings for the MpConfigSync mod.
+// Project-wide usings for the RegentFXFastBoot mod.
 global using System;
