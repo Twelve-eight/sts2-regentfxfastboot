@@ -37,3 +37,34 @@
   提示 (证明检测路径工作)。
 - 备选解法 (不改顺序): RitsuLib 设置 PreloadEffects=false 也可消除卡顿
   (RegentFX 自带开关), FastBoot 随后同样走逐帧预热路径。
+
+---
+
+## 2026-09-13 (凌晨) FastBoot 真机全链路验证通过 (主会话单线)
+
+### 手动排序已由主会话代为完成 (带备份)
+
+- 文件: `settings.save` (active profile 76561199466878739), 备份:
+  `settings.save.pre-fastboot-reorder.bak`。
+- **机制发现** (调试过程, 对未来有用):
+  1. 手动顺序存于 `mod_settings.mod_list` (id/is_enabled/source, snake_case), 不是
+     顶层 ModList;
+  2. 同 id 双源 (本地+工坊) 在列表里有**两条**条目, `SortModList` 的
+     `dictionary2[id]=index` 取**最后出现**的索引 —— 只移动第一条无效;
+  3. 本 mod 的 manifest 依赖 BaseLib → 拓扑排序中必须等 BaseLib 出队后才入队;
+     若 RegentFX 的手动优先级 < BaseLib, 它先加载, FastBoot 永远晚到。
+- **最终解**: mod_list 中把**两条** FastBoot 条目都移到 RegentFX 之前, 并把
+  BaseLib 插在 FastBoot 与 RegentFX 之间 (FastBoot 22 → BaseLib 23 → RegentFX 24)。
+
+### 真机验证 (godot.log)
+
+```
+16:47:17.352 TryLoadMod START RegentFXFastBoot (ModsDirectory)   ← 先于 RegentFX
+16:47:17.355 TryLoadMod START RegentFX (SteamWorkshop)
+[RegentFXFastBoot] EARLY-ARMED: preload skip active; deferred warm-up queued: 32 scenes
+[RegentFXFastBoot] Skipping RegentFX synchronous preload (boot stall fix)
+Time to main menu: 16,144ms   (基线三次: 18,321 / 18,738 / 19,979ms)
+```
+
+4.1s 同步预载被成功跳过, 进主菜单提速 ~2.2-3.8s, 预热队列 32 场景逐帧执行。
+项 10 全链路闭环 (此前仅 LATE-ARMED 检测)。
