@@ -47,3 +47,14 @@ _Process 每帧 ResourceLoader.Load 一次, 这不是异步资源加载. 单个�
 - no PCK/无内容的 STS002 警告是模板分析器噪声, 不是此处核心风险; 不为清 warning 创建无意义 localization.
 
 证据: `../astra-advice-evidence/2026-09-12/historical-startup-evidence.txt`, `build-results.json`; 对照源 NGame._EnterTree/GameStartup 和 OneTimeInitialization.ExecuteVeryEarly. 历史日志不是本轮新冒烟.
+
+## 附录: 先证明先后关系, 再谈性能数字
+
+通用流程见 [总建议附录](../astra-advice.md).
+
+- 把承诺写成三个可观察时点: patch 安装先于首次同步加载; warmer 挂载晚于合法主线程/场景树就绪; 消费缓存先于需要它的效果. 某一步已经过去, 后来订阅事件不可能补做.
+- 对提前/正常/太晚三种安装时机各推演一次. 扫到已加载程序集只证明发现目标, 不证明避免过启动开销. 对太晚要如实失败或按已定契约降级, 不印一条 fixed 日志.
+- queued=0 要问原因: 没有需要处理, 原版已经全部处理, 还是路径收集失败? 同一个计数能对应三种相反的性能结论.
+- 总耗时, 最慢单帧, 首次战斗缓存命中是不同指标. 分帧同步加载可能改善长冻结但保留单项尖峰, 必须测目标指标, 不把工作移动到稍后就称 zero cost.
+
+最短复验: 同一真实 mod 集合和冷暖条件, 先读时间线确认安装顺序, 再看是否跳过原同步路径, 最后观察队列消费/首个效果. 别只对比主菜单总时间, 它可能被其他 mod 或缓存状态主导.
