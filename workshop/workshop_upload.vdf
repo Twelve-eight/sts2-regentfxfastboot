@@ -48,6 +48,6 @@
 [*][url=https://github.com/Alchyr/BaseLib-StS2/releases]GitHub Releases(推荐)[/url] - 最新正式版
 [*]安装方法:下载 zip,解压到 [code]Slay the Spire 2/mods/[/code],并[b]取消订阅工坊版 BaseLib[/b](避免双加载)
 [/list]"
-	"publishedfileid"		"3799305611"
+	"changenote"		"v0.1.1: honest arm-state reporting - if RegentFX already preloaded this launch (load order put this mod after it), the log now says the boot stall already happened and how to fix it (move RegentFXFastBoot ABOVE RegentFX in the mod list; or set RitsuLib PreloadEffects=false). When armed early, the preload skip + per-frame warm-up works as designed."
 	"publishedfileid"		"3799305611"
 }

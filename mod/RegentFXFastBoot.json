@@ -3,7 +3,7 @@
   "name": "RegentFX Fast Boot",
   "author": "omp",
   "description": "Removes RegentFX's 4-second synchronous boot stall: skips the blocking preload and warms the same scene cache spread over idle main-menu frames instead.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "min_game_version": "0.111.0",
   "has_pck": false,
   "has_dll": true,
