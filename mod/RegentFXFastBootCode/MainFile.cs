@@ -95,6 +95,21 @@ public partial class MainFile : Node
             return;
         _activated = true;
 
+        // EARLY vs LATE is decided below by the cache state (astra-advice item
+        // 10, 2026-09-12 - historical log decode):
+        // - EARLY: we subscribed to AssemblyLoad during our own initializer and
+        //   RegentFX's assembly is loading RIGHT NOW (user's mod list puts us
+        //   above RegentFX). LoadScenes has not run yet -> the skip patch below
+        //   genuinely prevents the 4.1s synchronous preload; the cache is empty.
+        // - LATE: RegentFX's assembly + initializer predate us (workshop mods
+        //   load before ModsDirectory mods unless the user reorders). The
+        //   preload ALREADY RAN this launch (32 scenes, ~4.1s stall per the
+        //   2026-09-11 godot.log) - no patch can un-run it, and because Init is
+        //   the only LoadScenes call site, the skip patch never fires again.
+        //   The warm-up queue is empty by construction; the cache-count check
+        //   detects exactly this case and reports the supported remedy instead
+        //   of logging a misleading "queued: 0".
+
         try
         {
             var harmony = new Harmony(ModId);
@@ -124,6 +139,19 @@ public partial class MainFile : Node
                 // use non-generic IDictionary for Contains and reflect TryAdd off
                 // the ACTUAL runtime type (generic invariance rules out a typed cast).
                 var dict = (System.Collections.IDictionary)_modSceneCache;
+                int alreadyCached = dict.Count;
+                if (alreadyCached > 0)
+                {
+                    // LATE-ARMED: RegentFX's initializer preload already ran this
+                    // launch. The boot stall already happened; be honest about it.
+                    Log.Warn(
+                        $"RegentFX already preloaded {alreadyCached} scenes synchronously during its initializer - " +
+                        "the ~4s boot stall ALREADY happened this launch and cannot be undone now. " +
+                        "FIX: move RegentFXFastBoot ABOVE RegentFX in the game's mod list (the loader " +
+                        "honors that order, ModManager.SortModList) - the preload is then skipped and warmed " +
+                        "one scene per frame after boot instead.");
+                    return; // nothing to defer; skip patch remains harmless
+                }
                 if (collect.Invoke(null, null) is IEnumerable<string> paths)
                 {
                     foreach (string p in paths)
@@ -133,7 +161,7 @@ public partial class MainFile : Node
                     }
                 }
                 _cacheTryAdd = _modSceneCache.GetType().GetMethod("TryAdd");
-                Log.Info($"Deferred warm-up queued: {Pending.Count} scenes");
+                Log.Info($"EARLY-ARMED: preload skip active; deferred warm-up queued: {Pending.Count} scenes");
             }
             else
             {
