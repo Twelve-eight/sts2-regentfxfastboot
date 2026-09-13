@@ -1,3 +1,9 @@
+## 第二轮复审 (2026-09-13)
+
+当前隔离构建 exit 0, 3 warning/0 error. 当前 live `godot.log:938-940` 再次显示 RegentFX 已先同步预加载 32 scenes, FastBoot 随后才安装 skip prefix; 本次功能仍是 late-armed, 只在 mod 顺序满足前置时才有价值. 历史 early-armed run 不能推广成当前 profile 的通用结果.
+
+建议继续把 early-armed/late-armed 明确分级, 不打印无条件修复成功. 本轮没有重新启动游戏, 没有修改 mod list. 真实冷启动/暖启动/最大单帧和 warmer 队列仍需按同一 mod 集合复验.
+
 # Astra advice - RegentFXFastBoot
 
 日期: 2026-09-12. 主会话单线. 本轮隔离构建 exit 0, 3 警告, 0 错误. 已查看真实历史启动日志与当前 RegentFX/引擎控制流, 没有新启动游戏.
