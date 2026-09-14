@@ -1,8 +1,25 @@
-## 第二轮复审 (2026-09-13)
+## Performance review and implementation contract (2026-09-15)
 
-当前隔离构建 exit 0, 3 warning/0 error. 当前 live `godot.log:938-940` 再次显示 RegentFX 已先同步预加载 32 scenes, FastBoot 随后才安装 skip prefix; 本次功能仍是 late-armed, 只在 mod 顺序满足前置时才有价值. 历史 early-armed run 不能推广成当前 profile 的通用结果.
+Current decision: the unconditional performance description is not supported. The complete, cross-project execution plan is [STS performance plan](../docs/STS-PERFORMANCE-PLAN-2026-09-15.md); assignments are in [implementation-plan.json](../docs/performance-evidence/2026-09-15/implementation-plan.json).
 
-建议继续把 early-armed/late-armed 明确分级, 不打印无条件修复成功. 本轮没有重新启动游戏, 没有修改 mod list. 真实冷启动/暖启动/最大单帧和 warmer 队列仍需按同一 mod 集合复验.
+- SOURCE: five retained September 14 startup logs all report late activation, with no warmer attachment/completion markers. These are historical logs, not five newly launched game tests.
+- SOURCE: the old 4,176 ms and later 3,614 ms measurements bracket all of RegentFX TryLoadMod, including PCK, FMOD, Harmony and initializer work. They do not isolate the cost of LoadScenes.
+- SOURCE: current NGame construction precedes mod initialization. The existing constructor postfix cannot attach to that already-created NGame. The September 13 DEVLOG excerpt proves a queued early skip, not completed warm-up or a hot first combat; its full-chain claim is superseded by this narrower assessment.
+- SOURCE: _Process uses synchronous ResourceLoader.Load. One scene per frame is not nonblocking loading. The native lazy fallback can move cost to first effect use.
+- REPRO_ISOLATED_PASS: five fresh CLR probe processes called the actual installed collector, obtained 32 unique paths with no skipped constructors, and measured a first-call median of 8.878 ms. Warm batch-mean median was 33.406 microseconds/call. No resource loading or game frame measurement occurred.
+- REPRO_ISOLATED_PASS: the actual already-activated AssemblyLoad callback allocates 32 bytes/call in the isolated branch probe. This is a minor cleanup, not a plausible replacement for fixing lifecycle/native loading.
+
+Implement RFX-1 then RFX-2 under one owner. Queue only on a real LoadScenes interception, preserve native PreloadEffects=false, attach to the existing live lifecycle, prefer the engine's serial loading coordination, and verify actual cached resources rather than Task=true. Do not enqueue all optional work ahead of combat loading. Keep the explicit early-order requirement; do not silently reorder user mods.
+
+Evidence: [startup logs](../docs/performance-evidence/2026-09-15/startup-log-analysis.json), [current binary/source baseline](../docs/performance-evidence/2026-09-15/baseline.json), [isolated measurements](../docs/performance-evidence/2026-09-15/regent-probe-results.json).
+
+UNVERIFIED: controlled cold/warm A/B, native SceneTree attachment/drain, first-effect latency, rendering/audio, native memory and frame tails. This review changed no product source, live config, game process or deployed artifact.
+
+## 第三轮复审 (2026-09-14)
+
+当前隔离构建 exit 0, 3 warning/0 error. 当前源码仍在 mod initializer 中扫描 RegentFX 并给 `LoadScenes` 安装 skip prefix,同时给已构造 `NGame` 安装 warmer postfix. 本轮没有新游戏启动,所以沿用当前已有 live log 的 late-armed 风险,不宣称性能改善.
+
+需要同一 mod 集合的 cold/warm 启动证据: prefix 必须早于 RegentFX 首次同步加载, warmer 必须在合法场景树时机挂载并消费队列. 当前构建和 `queued 0` 都不足以证明.
 
 # Astra advice - RegentFXFastBoot
 
