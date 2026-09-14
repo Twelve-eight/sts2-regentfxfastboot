@@ -7,47 +7,46 @@
 	"title"		"RegentFX Fast Boot (万象辉星启动加速)"
 	"description"		"[h1]RegentFX Fast Boot(万象辉星启动加速)[/h1]
 
-消除 RegentFX(万象辉星)在启动阶段的 4 秒同步阻塞,把同样的场景缓存预热改到主菜单空闲帧里逐帧完成.
-
-[i]Removes RegentFX's ~4-second synchronous boot stall and re-warms the same scene cache frame-by-frame during idle main-menu time instead.[/i]
+[i]Conditional boot-stall fix for RegentFX. It requires a specific load order, it does not work at every mod position, and it never reorders your mods.[/i]
 
 [hr]
 
-[h2]它解决什么问题[/h2]
+[h2]它做什么(条件生效,顺序很重要)[/h2]
 
-实测(2026-09-11, 39 个 mod 环境):RegentFX v0.5.1 在 mod 初始化阶段同步预加载 32 个特效场景,单独占用 4.1 秒 - 是启动黑屏/间歇性未响应的最大单一来源.
+实测背景(2026-09-11, 39 个 mod 环境):RegentFX v0.5.1 在 mod 初始化阶段同步预加载 32 个特效场景,占用约 4 秒(2026-09-15 复核:历史计时区间包含程序集/PCK/初始化的全部工作,不止预加载本身)。
 
-本 mod:
+本 mod 只在满足前置顺序时生效:
 [list]
-[*]跳过 RegentFX 的同步预加载(补丁在 RegentFX 初始化之前生效,与 mod 加载顺序无关)
-[*]NGame 构造后,把同样的场景清单以每帧一个的速度在后台预热进 RegentFX 自己的缓存
-[*]效果完全一致:进第一场战斗前缓存就是热的;预热失败的场景自动回落到 RegentFX 原生的懒加载路径,特效永不丢失
+[*][b]硬性顺序要求[/b]:必须在游戏内模组列表把 RegentFXFastBoot 放在 RegentFX [b]上面[/b](加载器尊重用户的手动排序)。顺序不满足时,日志会如实报告 LATE-ORDER:本次启动不跳过任何内容、不做预热,启动卡顿(如发生)已经发生且无法撤回。
+[*]顺序正确时:在 RegentFX 的程序集加载瞬间挂上方法绑定,等它的初始化器真正调用同步预加载入口时才拦截(此时 PCK 挂载、脚本注册、RegentFX 配置默认值都已完成)
+[*]仅当 RegentFX 自己的 PreloadEffects 开关为开启时才会发生拦截;该开关关闭时本 mod 不做任何预热,保持原生关闭预加载的策略
+[*]拦截后把相同的场景清单以每帧一个的速度在启动与主菜单空闲帧预热进 RegentFX 自己的缓存
+[*]预热失败或未完成的场景由 RegentFX 原生懒加载路径兜底(VFXUtil.GenVFXNode 回落 PreloadManager.Cache),特效不会因此缺失;但这是回落路径,不是[b]永不失败[/b]的保证
+[/list]
+
+[h2]关于进战斗前缓存是否预热完成[/h2]
+
+[list]
+[*]第一场战斗前缓存是否已热[b]取决于时机[/b](机器速度、帧率、启动流程),本 mod 不对此作出保证
+[*]日志会按阶段如实报告:ARMED / BOUND / INTERCEPTED / QUEUED / ATTACHED / COMPLETED / LATE-ORDER / FAILED / UNSUPPORTED,可据此验证模组顺序调整是否生效
 [/list]
 
 [h2]使用方法[/h2]
 
 [list]
 [*]订阅本 mod 与 [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3747497501]RegentFX[/url]
-[*]无需任何操作,启动即生效
-[*]未安装 RegentFX 时本 mod 自动休眠,零副作用
+[*]在游戏内模组列表把 RegentFXFastBoot 移到 RegentFX 上面(关键步骤,不可省略)
+[*]未安装 RegentFX 时本 mod 保持待命,不做任何事
 [/list]
 
 [hr]
 
-[h2]前置依赖[/h2]
+[h2]依赖[/h2]
 
 [list]
-[*][b]必须[/b]:[url=https://steamcommunity.com/sharedfiles/filedetails/?id=3737335127]BaseLib[/url]
-[*][b]配合[/b]:[url=https://steamcommunity.com/sharedfiles/filedetails/?id=3747497501]RegentFX[/url]
-[/list]
-
-[b]重要 - BaseLib 版本提示[/b]
-
-创意工坊的 BaseLib 更新经常落后于官方 GitHub.游戏版本更新后,如果工坊版 BaseLib 报错或本 mod 无法加载,请前往 GitHub 下载最新版:
-[list]
-[*][url=https://github.com/Alchyr/BaseLib-StS2/releases]GitHub Releases(推荐)[/url] - 最新正式版
-[*]安装方法:下载 zip,解压到 [code]Slay the Spire 2/mods/[/code],并[b]取消订阅工坊版 BaseLib[/b](避免双加载)
+[*][b]配合[/b]:[url=https://steamcommunity.com/sharedfiles/filedetails/?id=3747497501]RegentFX[/url](未安装则本 mod 无事可做)
+[*]v0.2.0 起不再依赖 BaseLib(经二进制核查,本 mod 的 DLL 对 BaseLib 的运行时引用为零)
 [/list]"
-	"changenote"		"v0.1.1: honest arm-state reporting - if RegentFX already preloaded this launch (load order put this mod after it), the log now says the boot stall already happened and how to fix it (move RegentFXFastBoot ABOVE RegentFX in the mod list; or set RitsuLib PreloadEffects=false). When armed early, the preload skip + per-frame warm-up works as designed."
+	"changenote"		"v0.2.0: lifecycle repair with an explicit early-order requirement. No longer advertised as order independent: RegentFXFastBoot must load BEFORE RegentFX (place it above RegentFX in the mod list). Binding now happens only in the AssemblyLoad callback (method binding only, no asset collection there); warm-up is queued only when the LoadScenes interception actually fires, which also preserves RegentFX PreloadEffects=false; the warmer attaches to the already-constructed NGame instead of patching its constructor. Late order is reported truthfully as LATE-ORDER with no suppression and no warm-up, and warm-up failures are reported as FAILED with the native lazy-loading path preserved. Removed the BaseLib dependency after verifying the DLL emits zero BaseLib references. Manifest version bumped to 0.2.0."
 	"publishedfileid"		"3799305611"
 }

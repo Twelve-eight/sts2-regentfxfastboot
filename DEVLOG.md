@@ -89,3 +89,35 @@ Current assessment supersedes the earlier full-chain claim without rewriting his
 Plan: [STS-PERFORMANCE-PLAN-2026-09-15.md](../docs/STS-PERFORMANCE-PLAN-2026-09-15.md). Machine-readable task IDs RFX-1/RFX-2 and all-project ownership: [implementation-plan.json](../docs/performance-evidence/2026-09-15/implementation-plan.json). Evidence: [regent-probe-results.json](../docs/performance-evidence/2026-09-15/regent-probe-results.json).
 
 No product source edit, live config change, game operation, deployment, Workshop upload, commit or push was performed. Native A/B and first-consumer/memory/frame-tail verification remain explicit future gates.
+
+## 2026-09-15 (implementation agent) RFX-1: FastBoot lifecycle repair, explicit early-order contract
+
+实现 worker 按 [STS-PERFORMANCE-PLAN-2026-09-15.md](../docs/STS-PERFORMANCE-PLAN-2026-09-15.md) RFX-1 卡片执行。**本条取代 2026-09-13 "全链路验证通过" 条目的结论**:那次运行的证据只含 queued=32 与 skip 标记,没有 warmer attach/完成标记,且其 16,144ms 与基线差值不是受控 A/B;2026-09-15 审查的结论(五份 9-14 日志全部 late activation、无 attach/completion)是当前权威评估。旧条目按规则保留不改。
+
+### 结构性修复(对照计划证据逐条)
+
+1. **显式早序要求**:不再声称 order independent,从不重排用户模组。三种来源分别处理并如实上报:Early(AssemblyLoad 时刻绑定)/ Unknown(init 时程序集已在但无法证明初始化器已跑,绑定照装、前缀不触发则零效果)/ Late(缓存计数证明同步预载已发生,终态,不拦截不预热,日志给出排序解法)。
+2. **AssemblyLoad 回调瘦身**:只做 Entry 类型发现与 LoadScenes 方法绑定(纯 IL patch),不枚举/实例化 CardFX/PowerFX、不碰 Godot 场景、不收集资源路径。终态(Bound/Unsupported/Failed)后立即退订;且先查 phase 再取参数,消除了探针测到的每次 32 字节分配。
+3. **入队点移到前缀执行时**:LoadScenes 前缀真正进入(= PCK 已挂载、脚本注册、RitsuLib 默认值已设,依据 ModManager.cs:793-851 assembly→PCK→initializer 次序与 RegentEntry.cs 反编译)才解析精确类型缓存(ConcurrentDictionary<string, PackedScene> + 两参 TryAdd)并调用验证过的收集器。PreloadEffects=false 时 Init 根本不调 LoadScenes → 前缀不触发 → 不预热,原生策略保留。
+4. **NGame 构造后缀删除**:改读静态 `NGame.Instance`(_EnterTree 在 GameStartup → mod 初始化之前赋值,NGame.cs:527-557)+ `CallDeferred("add_child", warmer)`。附着重试兜底(SceneTree.ProcessFrame,900 帧上限,成功或超限即退订)。
+5. **前置条件不齐不压制**:前缀内任何一步失败(缓存/收集器/TryAdd 解析)一律 return true 让原版预载照跑;压制后失败(逐路径加载失败、attach 失败)记 FAILED warm-up 并明示由 GenVFXNode→PreloadManager.Cache 懒加载兜底。缓存计数一律不作成功证据。
+6. **状态机**:spine Dormant→Armed→Bound→Intercepted→Queued→Attached→Completed,每个 flag 仅在操作成功后提交(Attached 在节点真正入树时提交);独立维度:OrderProvenance(Early/Unknown/Late)、TerminalOutcome(None/Unsupported/Failed)。日志关键词 ARMED/BOUND/INTERCEPTED/QUEUED/ATTACH/ATTACHED/COMPLETED/LATE-ORDER/FAILED/UNSUPPORTED。
+7. **幂等安装**:Initialize 加闩;单 AssemblyLoad handler、单 Harmony patch、单 warmer 节点;ProcessFrame 重试处理器自退订。每个钩子在类头注释标注 producer/owner/first consumer/cleanup point。
+
+### BaseLib 依赖评估(计划 RFX-1 第 1 条要求先核查再动)
+
+- 二进制核查说明(主会话更正):字符串检查("BaseLib" 出现 0 次,对照 "GodotSharp"=1、"0Harmony"=1)运行在**重写前的基线 Release DLL** 上(含 SkipLoadScenes/TryActivate 等旧符号);该基线构建的 post-build 目标曾把同一旧 DLL 复制进实机 mods 目录(无行为变化)。结论仍然成立,因为新旧两版源码都不引用 BaseLib(源码级 grep 为零),csproj 中 `Alchyr.Sts2.BaseLib` 为 `PrivateAssets="All"`(仅构建期)。→ manifest 移除 dependencies 块合理,且消除了一个会把本 mod 拓扑排序压到 RegentFX 之后的约束(2026-09-13 条目发现的晚到根因之一)。
+- 遗留:csproj 的 BaseLib PackageReference 不在 RFX-1 允许文件内,未动;它不产生运行时引用,后续可由主会话顺手清理。
+
+### 文件变更
+
+- mod/RegentFXFastBootCode/MainFile.cs:重写(上述 1-7)。
+- mod/RegentFXFastBoot.json:0.1.1→0.2.0;description 改为条件契约;移除 BaseLib 依赖。
+- workshop/workshop_upload.vdf:description/changenote 重写为实测条件契约,删除 order-independent/永不失败/零成本表述;引号安全:被引值内无双引号(多行 description 的首尾引号行与原文件同构),花括号 1/1 平衡,总引号数 34(偶),字符集仅 ASCII+简体中文。
+- DEVLOG.md:仅追加本条。
+
+### 验证状态(诚实声明)
+
+- 本 worker 只写代码,未构建、未运行、未部署;正确性由主会话集中构建与实机验证。
+- 待集中验收场景(计划卡):early-order 实机观察到前缀先于原版预载执行、单个 warmer 入树、队列推进;late-order 运行不得报告启动收益;target 缺失/PreloadEffects 关闭/成员缺失/attach 失败各自有独立真话路径。
+- 未证实项:RegentFX `Setting` 类全名未在留存反编译中确认(仅 Entry.Init 反编译引用 `Setting.PreloadEffects`),代码中为 best-effort 读取、失败报 unknown,已注释标记。
