@@ -277,8 +277,14 @@ public partial class MainFile : Node
             }
 
             var harmony = new Harmony(ModId);
+            // Priority pinned at 400 explicitly: the BootTimer diagnostic observer
+            // (when installed) patches the same LoadScenes at priority 800 so its
+            // prefix always runs BEFORE this suppressor - a false return from a
+            // higher-priority prefix would skip lower-priority prefixes and blind
+            // the observer exactly in early-order runs. Keep this at or below 400.
             var prefix = new HarmonyMethod(typeof(MainFile).GetMethod(
-                nameof(LoadScenesPrefix), BindingFlags.Static | BindingFlags.NonPublic));
+                nameof(LoadScenesPrefix), BindingFlags.Static | BindingFlags.NonPublic))
+            { priority = 400 };
             harmony.Patch(loadScenes, prefix: prefix);
             _entryType = entryType;
             _phase = BindPhase.Bound;
