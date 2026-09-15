@@ -120,4 +120,94 @@ No product source edit, live config change, game operation, deployment, Workshop
 
 - 本 worker 只写代码,未构建、未运行、未部署;正确性由主会话集中构建与实机验证。
 - 待集中验收场景(计划卡):early-order 实机观察到前缀先于原版预载执行、单个 warmer 入树、队列推进;late-order 运行不得报告启动收益;target 缺失/PreloadEffects 关闭/成员缺失/attach 失败各自有独立真话路径。
-- 未证实项:RegentFX `Setting` 类全名未在留存反编译中确认(仅 Entry.Init 反编译引用 `Setting.PreloadEffects`),代码中为 best-effort 读取、失败报 unknown,已注释标记。
+- 未证实项:RegentFX `Setting` 类全名未在留存反编译中确认(仅 Entry.Init 反编译引用 `Setting.PreloadEffects`),代码中为 best-effort 读取,失败报 unknown,已注释标记.
+
+## 2026-09-16 根因更正 + 持久化陷阱(顺序修复只生效一轮的原因)
+
+### 根因更正(取代此前"重复 id"诊断)
+
+此前把"settings.save 里存在两个 `RegentFXFastBoot` 行"当作根因.该判断来自
+`G:\steam\steamapps\common\Slay the Spire 2\SlayTheSpire2\steam\76561199466878739\settings.save`
+(9055 B,49 行).**引擎不读该文件**.引擎日志给出权威路径:`User Data Directory: C:/Users/o_Obl/AppData/Roaming/SlayTheSpire2`
+与 `Wrote .. user://steam/76561199466878739/settings.save`;该目录经 junction 指向
+`G:\appdata\C-Users-o_Obl\Roaming\SlayTheSpire2`.游戏目录那份是死文件,本次已按字节还原为原状.
+
+权威文件修复前:43 行,sha256 `22603073963e2330`,8369 B,**无重复 id**,`RegentFXFastBoot`@38,`RegentFX`@34.
+即纯顺序反转.直接证据为用户 `logs/godot.log:762`:
+`[RegentFXFastBoot] LATE-ORDER: .. ModSceneCache.Count=32, PreloadEffects reads True`.
+
+### 修复(已写入实时文件,尚未实机验证)
+
+把 `RegentFXFastBoot` 行从索引 38 移到 34(`RegentFX` 现为 35).行集合不变(43 行),仅顺序变化.
+写后 8369 B,sha256 `00de73cc15173981`.写入前已确认游戏进程未运行,写入后重新解析通过.
+
+序列化配方(在两个文件上均字节级验证),无结尾换行:
+
+```python
+json.dumps(obj, indent=2, ensure_ascii=False, separators=(",", ": ")).replace("\n", "\r\n")
+```
+
+`ModList` 位于 `mod_settings.mod_list`,不是顶层 `mod_list`.
+
+### 持久化陷阱:订阅状态下修复只生效一轮
+
+写入者顺序(权威):
+
+1. **引擎** `ModManager.Initialize`:`RemoveDisabledMods` 把 workshop 副本标记为 `DisabledDuplicate`
+   但**不从 `_mods` 移除**;`SortModList` 末尾 `list5.AddRange(list2)` 把禁用项追加到**尾部**;
+   随后 `_settings.ModList = list` 用完整重建(含尾部禁用项)替换内存设置.
+   `NGame.Quit()` -> `SaveManager.Instance.SaveSettings()` 落盘(`engine-dllsrc/MegaCrit.Sts2.Core.Nodes/NGame.cs:989`).
+2. **RitsuLib** `STS2RitsuLib.Settings.ContentModLoadOrderCoordinator` 仅在其设置页**按钮**中调用
+   (`SortDeterministically` 在 `RitsuLibModSettingsBootstrap` 中只有一处引用,位于按钮回调).
+   其 `ApplyPriorityOrder` 调用 `RemoveLocalDuplicateWorkshopEntries` 删除 workshop 重复行 --
+   这正是最新一轮写盘 43 行而非 53 行的原因.但 `BuildDependencyValidPriorityOrder` 对非 requested 的 id
+   使用 `priorityById.Count + currentPriority`,即**保留引擎运行时相对顺序** --
+   该按钮**不能**修正 RFX/RegentFX 顺序,只能去重.
+3. 两者都在退出时写;实时文件行序与 RitsuLib 记录的 `Written mod_list priority=[..]` 完全一致,确认其为最后写入者.
+
+**关键机制**:`SortModList` 中 `dictionary2[manualOrdering[i].Id] = i` 只按 id 建索引,**同一 id 的最后一行胜出**.
+只要文件里存在第二行 `RegentFXFastBoot`(禁用副本,位于尾部),`priority[RFX]` 即等于尾部索引,
+恒大于 `priority[RegentFX]` -> RFX 每次晚序.**自我延续**:每轮重建都把尾部重复行写回文件.
+
+对 `godot.log` 实测:枚举 53 个 manifest(43 个唯一 id,10 个 id 同时存在本地与 workshop 副本);
+引擎排序输出 `RegentFX`@21,`RegentFXFastBoot`@35;RitsuLib 的 `Before mod_list priority` 前 43 项与引擎排序输出
+**逐项相等**,后 10 项即 10 个禁用副本;`Written` 与修复前文件行序**逐项相等**.模型据此锁定.
+
+按该模型模拟(manual order = 当前实时文件):
+
+- 保持订阅 `3799305611`:第 1 轮 RFX@34(早序)-> 第 2 轮 RFX@39(晚序)-> 第 3 轮 RFX@39(晚序)
+- 取消订阅 `3799305611`:第 1 轮 RFX@34(早序,52 行)-> 第 2 轮 RFX@27(早序)-> 第 3 轮 RFX@27(早序)
+
+即**保持订阅则修复只生效一轮**;取消订阅后持久.原因是取消订阅后引擎只枚举到一份 RFX,不再产生尾部重复行.
+
+验收只看 `RegentFXFastBoot`/`RegentFX` 这一对的相对序,不要追全表不动点:
+取消订阅后第 2 轮起,其余 9 个双源 id 的尾部禁用副本仍按"最后索引胜出"把它们各自推到启用区段末尾,
+全表因此与上一轮不同 -- 这是既有现象,对 RFX 无影响(两个 mod 均无依赖边,优先级索引小的先出队,
+只要文件保持 RFX 在 RegentFX 之前,重建输出就保持该相对序).
+
+### 处置顺序(不可颠倒)
+
+1. 在 Steam 取消订阅 workshop 项 `3799305611`.本地 `mods/RegentFXFastBoot/` 保持不动 --
+   它是 `.tooling/sync-live-mods-from-payload.ps1` 的部署目标.
+2. 取消订阅后确认 `settings.save` 仍为 43 行且 `RegentFXFastBoot` 在 `RegentFX` 之前.
+3. 再启动游戏验证.
+
+**若在取消订阅前启动**:该轮仍会成功(`dictionary2` 用的是启动时读入的文件),但退出会写回 53 行,
+下一轮即退化;且取消订阅**不会**清除那行陈旧数据,需再编辑一次文件.
+
+**永久不变量**:RFX 现为本地独占 mod.重新订阅 `3799305611` 会静默重新引入尾部重复行并再次破坏顺序.
+
+### 验证状态(诚实声明)
+
+- 上述模型已对日志 ground truth 逐项验证,但**修复本身尚未实机运行**.
+  实机验收:`godot.log` 中无 `LATE-ORDER:`,且出现 `ARMED:` / `INTERCEPTED:` /
+  `WARMED: .. loaded through the live NAssetLoader`.
+- 游戏进程在编辑前后均未运行;本次未部署,未构建,未上传 Workshop.
+- 备份:`.tmp/settings-backup/settings.save.LIVE-before-orderfix`(修复前实时文件,sha256 `22603073963e2330`);
+  `settings.save.before-orderfix`(已死的游戏目录副本,sha256 `a9725254153b928b`,已按字节还原).
+
+### 路径更正(避免后续会话再改错文件)
+
+- **权威**:`G:\appdata\C-Users-o_Obl\Roaming\SlayTheSpire2\steam\76561199466878739\settings.save`
+  (经 `C:\Users\o_Obl\AppData\Roaming\SlayTheSpire2` junction 访问同一字节).
+- **死文件,勿改**:`G:\steam\steamapps\common\Slay the Spire 2\SlayTheSpire2\steam\76561199466878739\settings.save`.
