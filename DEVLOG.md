@@ -737,8 +737,13 @@ RFX 的本地副本**已删除**,字典无该 id,所以工坊副本不会被禁�
 
 ### 当前证据(本节时刻)
 
-- 载荷 DLL `41deac9484d3be2d`(58880 B),PDB `66aea1af2df9544c`,json `159ae5a667659c60`(version 0.4.0).
-- 相对上一节载荷(`ebd2284a9f683234`)的字符串增量只有缺陷 1 的修复(2 条日志 + `SlotBusy` + `container`).
+- **最终载荷(交付值)**:DLL `27c6fc08616bc025`(58880 B),PDB `fb3aac29e5cc0cbb`,json `159ae5a667659c60`(version 0.4.0).
+  对应提交 `5617495`;`refresh-workshop-payloads.ps1` exit 0(8/8 ALREADY_CURRENT).
+- 中间载荷(仅存档,勿再引用):`5afbf4b85e143c32` -> `ebd2284a9f683234` -> `41deac9484d3be2d` -> `27c6fc08616bc025`.
+  各段增量已核:`ebd2284a` 相对 `5afbf4b8` 增加 2 条日志 + `SlotBusy` + `container`;
+  `27c6fc08` 相对 `ebd2284a` 的**用户字符串增量为 0**(只改控制流与注释,IL 变而字符串表不变),
+  因此不能靠哈希相同/不同来判断这两者是否同一版本 - 这正是本仓库"哈希只证明 provenance"的又一例.
+- `check-live-payload.ps1` 在最终载荷下 exit 1(STALE):live 仍是 0.2.0 / `c0e149878b228f28` / 34304 B,符合"尚未发布"的预期.
 - 缺陷 2 的修复在 `ModNoticeWatcher` 内,不新增用户可见字符串.
 - `refresh-workshop-payloads.ps1` 与 `test-push-verification.ps1` 均需在最终提交后重跑(见下).
 - **实机验证仍未做**:弹窗的外观/点击/关闭需要启动游戏.这是本项唯一未验证环节.
