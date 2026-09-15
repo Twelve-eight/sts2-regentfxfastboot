@@ -378,3 +378,41 @@ idx 50  RegentFXFastBoot   source=steam_workshop  enabled=True   <- 唯一真实
 `ModManager.Initialize` 每轮按 `_mods`(实际在场 mod)重建 `mod_list`,因此**启动一次游戏即会清除该行**;
 之后 LOM 面板只会显示唯一一行,把它移到 RegentFX 上方并应用即可持久.
 在完成这两步之前,脚本报 FAIL 是如实反映现状,不是回归.
+
+### 载荷同一性:IL 级证明(2026-09-16 03:1x,取代此前的反编译文本比对)
+
+此前用 `ilspycmd` 的反编译 **C# 文本**比对两个 DLL,得出"结构性差异"的结论是**错的**:
+同一份代码在不同引用解析环境下会被渲染成不同文本(`(Type)24` / `StringName.op_Implicit` / `Unknown result type` 注释),
+`ref` vs `in` 也是渲染产物 - 实测两个 DLL 的 `SetGodotClassPropertyValue` 签名**都**带 `modreq(InAttribute)`,程序集引用集合也相同.
+
+改用 IL(`ilspycmd -il`,与引用解析无关)重新比对,方法:按 `类::方法(参数)` 建键,
+对共有方法做规范化(去 `//` 注释,去 `.` 指令,去 `IL_xxxx:` 标签,分支目标替换为占位符)后比 opcode 序列.
+
+**结论**(证据 `tools/il-evidence/`,含两份 IL 文本与已发布 DLL 副本):
+
+| 项 | 结果 |
+|---|---|
+| 已发布 0.2.0 的方法数 | 37 |
+| 当前构建的方法数 | 63 |
+| 仅存在于旧版的方法 | **0** |
+| 仅存在于新版的方法 | 26,全部属 RFX-3 新增的三个类及其生成的访问器 |
+| 共有方法中规范化后不同的 | **1**(`MainFile.Initialize()`) |
+
+`Initialize()` 的全部差异 = 两条日志串改写 + 新增一句 `call LateOrderNoticeWatcher::Schedule()`.其余 36 个共有方法**逐指令相同**.
+
+这证明:暂存载荷就是当前源码的构建,行为差异仅限日志文本与新增弹窗;
+不证明运行时正确性 - 那需要实机启动,尚未进行.
+
+### 实测加载路径(第二条建议核实结果:成立)
+
+| 位置 | DLL | json | 版本 |
+|---|---|---|---|
+| 游戏实际加载(工坊 `3799305611`) | 34304 `c0e149878b228f28` | 826 B | **0.2.0** |
+| 仓库暂存 | 53248 `cb5cb518e093752c` | 1274 B | 0.3.0 |
+
+工坊副本的 DLL 内**不含**任何 NOTICE 串,也不含 `LateOrderNoticeWatcher` -
+**当前启动游戏跑的是旧 DLL,不会有弹窗**.必须先把 0.3.0 推上工坊(或覆盖工坊内容目录),弹窗才会出现在实机里.
+
+另:`mods/RegentFXFastBoot/` 当前仍为空(未被重建).
+任何不带 `-p:CopyToModsFolderOnBuild=false` 的构建都会重建该目录,恢复尾部同 id 行 -> 强制晚序,
+并使 `verify-fastboot-order.ps1` 的"恰好 1 行"断言失败.本会话所有构建均带该参数,已逐次核对.
