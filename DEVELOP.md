@@ -33,11 +33,21 @@ RFX **必须早于** RegentFX 加载,否则 `LoadScenes` 前缀装上时初始�
    RFX 的弹窗把它作为推荐路径.
 2. 任何其它能写 `mod_list` 的工具.
 
-## 4. 加速失败时的用户可见行为(RFX-3,2026-09-16)
+## 4. 用户可见行为:两种一次性弹窗(RFX-3/RFX-4)
 
-**触发条件**:本次启动判定为 `OrderProvenance.Late`(RegentFX 的 `ModSceneCache` 已被填充,
+两种通知共用同一个模态,同一套宿主逻辑与同一份一次性记账,只有内容与按钮集不同
+(`NoticeKind.LateOrder` / `NoticeKind.Succeeded`).泛化而非复制是刻意的:关闭路径带着一个
+`NModalContainer.Clear()` 的隐患(见下),复制一份就是第二次犯错的机会.
+
+**触发条件(失败弹窗)**:本次启动判定为 `OrderProvenance.Late`(RegentFX 的 `ModSceneCache` 已被填充,
 证明同步预加载已经发生且不可撤回).这是唯一"确定性失败"的判据;`Unknown` 不算失败
 (它只是不可观测,前缀仍可能生效).
+
+**触发条件(成功弹窗)**:`CompleteWarmUp` 中 `_warmed > 0 && FailedPaths.Count == 0 && Pending.Count == 0`.
+刻意收窄:只有整条队列提交完毕,至少真的预热了一个场景,且无一失败时才算"确实加速了".
+部分完成或有失败时不弹 - 此弹窗绝不能宣称一个没有发生的节省.
+`_warmed == 0` 的零工作早退分支根本不会走到 `CompleteWarmUp`(根本没建预热节点),所以
+"RegentFX 的预加载本来就会是空操作"的那次启动同样保持静默.
 
 **时机**:进入主菜单后(`NGame.Instance.MainMenu != null`),延迟若干帧再弹,避免与引擎
 自己的模态(如 `NConfirmModLoadingPopup`)抢 `NModalContainer` 的唯一槽位.
@@ -48,27 +58,39 @@ RFX **必须早于** RegentFX 加载,否则 `LoadScenes` 前缀装上时初始�
 理由:`NModalContainer` 自带背板、输入拦截与 `ActiveScreenContext` 登记;它的 `Add` 会把节点
 强转成 `IScreenContext`,而该接口只有 `DefaultFocusedControl` 一个成员,自绘节点实现它成本极低.
 
-**两个按钮**(用户决定 2026-09-16):
+**失败弹窗的两个按钮**(用户决定 2026-09-16);成功弹窗只有一个“知道了”按钮(无需任何操作):
 
 | 按钮 | 行为 |
 |---|---|
 | 使生效(指引) | 显示具体操作步骤(装 Load Order Manager -> 打开"加载顺序" -> 把 RegentFXFastBoot 移到 RegentFX 上面 -> 应用 -> 重启),并打开 LOM 的工坊页.**不写任何文件,不改顺序**. |
 | 不再提示 | 关闭弹窗.一次性状态**在弹窗展示时就已经记录**(见"频率"),所以此按钮只是让用户主动关掉它,而不是记录点.加速功能**保持待命**:若用户以后自己把顺序修好,加速仍会自动生效. |
 
-**频率**:仅提示一次.状态在**展示成功时**记录,因此用户不点任何按钮直接退出游戏,下次也不会再弹.
+**频率**:每种弹窗各仅提示一次(两个独立标志).状态在**展示成功时**记录(而不是按钮按下时),因此用户不点任何按钮直接退出游戏,下次也不会再弹.
 只有"确实显示过"才会记录 - 没能显示(模态槽位被占/主菜单未出现)时不记录,下次仍会尝试.
 
 **状态文件**:`OS.GetUserDataDir()/RegentFXFastBoot/notice.json`
 (Windows 即 `%APPDATA%/SlayTheSpire2/RegentFXFastBoot/notice.json`).
-只存一个布尔语义(`noticeShown`).读写全部包在 try/catch 内:**任何失败都不得影响游戏**,
-最坏情况只是多弹一次.
+两个独立标志共用一份载荷(`noticeShown` / `successShown`).由此有两条硬约束:
+
+- **每次写入都写两个标志的并集**.文件是整体覆写,只写刚变化的那个标志会抹掉另一个,
+  让被抑制的弹窗复活.
+- **每次读取只匹配自己那个键** (`"noticeShown"\s*:\s*true`).裸搜 `true` 会把
+  `{"noticeShown": false, "successShown": true}` 读成"失败弹窗已经显示过",静默压掉本该出现的那个.
+
+读写全部包在 try/catch 内:**任何失败都不得影响游戏**,最坏情况只是多弹一次.
+本文件是 mod 唯一写入的文件:弹窗**不写** `settings.save`,也**不重排**任何 mod.
+
+**日志前缀**:失败弹窗用 `NOTICE:`,成功弹窗用 `NOTICE-SUCCESS:`(两个前缀互不为子串,
+所以 `NOTICE:` 的模式不会命中成功行).验收脚本的断言全部按前缀分域 - 否则成功行的
+"one-shot state recorded" 会被算到失败弹窗头上.
 
 ### 验收顺序(不可颠倒)
 
-弹窗**只在确定性晚序**被调度(`LateOrderNoticeWatcher.Schedule()` 仅出现在
-`ModSceneCache.Count > 0` 分支),所以观察它必须发生在修好顺序**之前**:
+失败弹窗**只在确定性晚序**被调度(`ModNoticeWatcher.Schedule(NoticeKind.LateOrder)` 仅出现在
+`ModSceneCache.Count > 0` 分支),所以观察它必须发生在修好顺序**之前**;
+成功弹窗则**只在成功的早序运行**被调度(`CompleteWarmUp` 内),两者不会同一次出现:
 
-1. 推出 0.3.0(或覆盖工坊内容目录).
+1. 推出 0.4.0(或覆盖工坊内容目录).
 2. **跑 `tools/check-live-payload.ps1`,exit 0 才继续**.
    工坊订阅下载是**异步**的:推送被接受不等于 live 副本已更新,而
    `refresh-workshop-payloads.ps1`(查仓库暂存树)与 steamcmd 日志(只证明上传被接受)
@@ -78,18 +100,27 @@ RFX **必须早于** RegentFX 加载,否则 `LoadScenes` 前缀装上时初始�
    门禁会(正确地)报 STALE.
 3. **在顺序仍然错误的状态下启动游戏**(此时 `settings.save` 为 RFX@50 vs RegentFX@27,仍晚序):
    进主菜单后应出现一次弹窗,然后退出.预期日志:
-   `NOTICE: late-order popup scheduled` -> `NOTICE: late-order popup shown on the main menu` ->
+   `NOTICE: popup scheduled` -> `NOTICE: late-order popup shown on the main menu` ->
    `NOTICE: one-shot state recorded at ..`;预期文件:
-   `%APPDATA%/SlayTheSpire2/RegentFXFastBoot/notice.json`(内容 `{"noticeShown": true}`).
+   `%APPDATA%/SlayTheSpire2/RegentFXFastBoot/notice.json`(含 `"noticeShown": true`).
+   **这一次不会弹成功窗**(本次是晚序,根本没预热),所以日志里不应出现 `NOTICE-SUCCESS:` 行.
    这一次启动同时会清掉 `settings.save` 里的陈旧行(见下),不要为此重复启动.
 4. 之后才用 LOM 打开"加载顺序",把唯一那条 `RegentFXFastBoot` 移到 `RegentFX` 上方,点"应用".
 5. 重启验证加速生效:`tools/verify-fastboot-order.ps1` 应 exit 0(无 `LATE-ORDER`,出现
    `ARMED`/`BOUND`/`INTERCEPTED`/`WARMED`).
-   **这一次是早序运行,日志里不应出现任何 `NOTICE:` 行** - 脚本会报
-   `no notice scheduled (correct for an early-order run)`.
-   **不要**期望看到 `already shown in an earlier launch`:该串只在 `Schedule()` 内部,
-   而 `Schedule()` 的唯一调用点是确定性晚序分支(`MainFile.cs:286`),早序根本不会调用它.
-   若想验证"一次性状态确实抑制了弹窗",必须**保持晚序**再启动一次(即在第 4 步调序之前),
+   **这一次是早序运行,失败弹窗不会出现** - 脚本应报
+   `no late-order notice scheduled (correct for an early-order run)`;
+   日志里也不应出现任何 `NOTICE:` 行(失败弹窗专有前缀).
+   但**成功弹窗会**在这台机器上首次出现(这是它的设计触发条件):预期
+   `NOTICE-SUCCESS: popup scheduled` -> `NOTICE-SUCCESS: the main menu is up` ->
+   `NOTICE-SUCCESS: popup shown on the main menu (once): acceleration ran and 32 scene(s) were warmed` ->
+   `NOTICE-SUCCESS: one-shot state recorded at ..`;脚本会报 `success notice shown once` 与
+   `success notice backed by the log: warmed=32 failed=0 notSubmitted=0`(它会交叉核对弹窗文本里的
+   场景数与 `COMPLETED` 行,两者不一致即失败).**再启动一次**则该行变为
+   `success notice correctly suppressed: already shown in an earlier launch`.
+   **不要**期望失败弹窗出现 `already shown in an earlier launch`:该串只在 `Schedule()` 内部,
+   而失败弹窗的唯一调用点是确定性晚序分支(`MainFile.cs:286`),早序根本不会调用它.
+   若想验证"一次性状态确实抑制了失败弹窗",必须**保持晚序**再启动一次(即在第 4 步调序之前),
    那时才会出现该串;调序之后的早序运行无法验证抑制逻辑.
 
 顺序若已先修好,弹窗只能靠临时把 RFX 移回 RegentFX 下方再启动一次来复测.

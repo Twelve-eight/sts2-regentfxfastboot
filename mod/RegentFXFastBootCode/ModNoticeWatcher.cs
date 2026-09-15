@@ -5,24 +5,28 @@ using Godot;
 namespace RegentFXFastBoot.RegentFXFastBootCode;
 
 /// <summary>
-/// Watches for the main menu and shows the late-order notice once (RFX-3, 2026-09-16).
+/// Watches for the main menu and shows a one-shot notice there (RFX-3 late-order notice,
+/// 2026-09-16; RFX-4 success notice, 2026-09-17).
 ///
-/// Only created when this launch is DEFINITIVELY late order (RegentFX's scene cache was
-/// already populated when this mod initialized, so the synchronous preload provably ran and
-/// cannot be undone). It is never created for the Unknown or Early cases: those may still
-/// succeed, and a popup would then be wrong.
+/// Two independent uses, never both in one launch:
+///   - LateOrder: scheduled when this launch is DEFINITIVELY late order (RegentFX's scene
+///     cache was already populated at initializer time, so the synchronous preload provably
+///     ran and cannot be undone). Never scheduled for the Unknown or Early cases: those may
+///     still succeed, and a failure popup would then be wrong.
+///   - Succeeded: scheduled when the warm-up actually ran and completed with no failures, so
+///     the player learns the mod did something rather than silently changing boot behaviour.
 ///
-/// Lifecycle: producer = MainFile.Initialize; owner = this mod; first consumer = _Process;
+/// Lifecycle: producer = MainFile (Schedule); owner = this mod; first consumer = _Process;
 /// cleanup = QueueFree on every terminal path (shown, gave up, no main menu). It is attached
 /// to the scene tree ROOT rather than to NGame so that it survives whatever the engine does
 /// with the game node, and it is freed as soon as its single job is done - it never becomes a
 /// permanent per-frame cost.
 ///
 /// Bounded on every axis: a frame budget for the menu to appear and a small retry budget for
-/// the modal container to be free. A popup that cannot be shown is reported, never retried
+/// the modal container to be free. A notice that cannot be shown is reported, never retried
 /// forever, and never recorded as shown.
 /// </summary>
-internal sealed partial class LateOrderNoticeWatcher : Node
+internal sealed partial class ModNoticeWatcher : Node
 {
     private const string WatcherNodeName = "RegentFXFastBoot_NoticeWatcher";
 
@@ -38,6 +42,8 @@ internal sealed partial class LateOrderNoticeWatcher : Node
     /// <summary>Frames between modal-slot attempts (the slot is often taken for a frame or two).</summary>
     private const int ShowRetryInterval = 30;
 
+    private NoticeKind _kind;
+    private int _warmed;
     private int _frames;
     private int _settleFrames;
     private int _attempts;
@@ -45,40 +51,43 @@ internal sealed partial class LateOrderNoticeWatcher : Node
     private bool _menuSeen;
 
     /// <summary>
-    /// Attaches the watcher when the notice still needs to be shown. Every failure path is
-    /// contained: the popup is a convenience, and the game must never be affected by it.
+    /// Attaches a watcher when the notice still needs to be shown. Every failure path is
+    /// contained: the notice is a convenience, and the game must never be affected by it.
     /// </summary>
-    internal static void Schedule()
+    internal static void Schedule(NoticeKind kind, int warmed = 0)
     {
         try
         {
-            if (NoticeState.IsNoticeShown())
+            if (NoticeState.IsShown(kind))
             {
-                MainFile.Log.Info("NOTICE: late-order popup already shown in an earlier launch; not scheduled again");
+                MainFile.Log.Info($"{PrefixFor(kind)}: popup already shown in an earlier launch; not scheduled again");
                 return;
             }
 
             var mainLoop = Engine.GetMainLoop() as SceneTree;
             if (mainLoop?.Root == null)
             {
-                MainFile.Log.Warn("NOTICE: no SceneTree root available; the late-order popup is not scheduled this launch");
+                MainFile.Log.Warn($"{PrefixFor(kind)}: no SceneTree root available; the popup is not scheduled this launch");
                 return;
             }
 
-            var watcher = new LateOrderNoticeWatcher
+            var watcher = new ModNoticeWatcher
             {
                 Name = WatcherNodeName,
+                _kind = kind,
+                _warmed = warmed,
                 ProcessMode = ProcessModeEnum.Always
             };
             // Deferred, matching the warmer's attachment path in MainFile: this runs from a
             // mod initializer inside NGame's _EnterTree, so the tree is mid-traversal and a
             // direct AddChild is not safe.
             mainLoop.Root.CallDeferred("add_child", watcher);
-            MainFile.Log.Info("NOTICE: late-order popup scheduled; it will appear once the main menu is up (this launch only)");
+            MainFile.Log.Info(
+                $"{PrefixFor(kind)}: popup scheduled; it will appear once the main menu is up (this launch only)");
         }
         catch (Exception e)
         {
-            MainFile.Log.Warn($"NOTICE: scheduling the late-order popup failed ({e.GetType().Name}: {e.Message}); the game is unaffected");
+            MainFile.Log.Warn($"{PrefixFor(kind)}: scheduling the popup failed ({e.GetType().Name}: {e.Message}); the game is unaffected");
         }
     }
 
@@ -89,7 +98,7 @@ internal sealed partial class LateOrderNoticeWatcher : Node
             if (++_frames > MenuWaitFrameLimit)
             {
                 MainFile.Log.Warn(
-                    $"NOTICE: the main menu did not appear within {MenuWaitFrameLimit} frames; the late-order popup is dropped " +
+                    $"{PrefixFor(_kind)}: the main menu did not appear within {MenuWaitFrameLimit} frames; the popup is dropped " +
                     "for this launch and will be offered again next launch");
                 QueueFree();
                 return;
@@ -102,7 +111,7 @@ internal sealed partial class LateOrderNoticeWatcher : Node
             if (!_menuSeen)
             {
                 _menuSeen = true;
-                MainFile.Log.Info("NOTICE: the main menu is up; waiting for it to settle before showing the late-order popup");
+                MainFile.Log.Info($"{PrefixFor(_kind)}: the main menu is up; waiting for it to settle before showing the popup");
             }
 
             // Let the menu finish its own entry animation and any engine modal it raises.
@@ -117,19 +126,23 @@ internal sealed partial class LateOrderNoticeWatcher : Node
             if (++_attempts > ShowAttemptLimit)
             {
                 MainFile.Log.Warn(
-                    $"NOTICE: the engine's modal slot stayed busy for {ShowAttemptLimit} attempts; the late-order popup is dropped " +
+                    $"{PrefixFor(_kind)}: the engine's modal slot stayed busy for {ShowAttemptLimit} attempts; the popup is dropped " +
                     "for this launch and will be offered again next launch");
                 QueueFree();
                 return;
             }
 
-            if (LateOrderNotice.TryShow())
+            if (ModNotice.TryShow(_kind, _warmed))
                 QueueFree();
         }
         catch (Exception e)
         {
-            MainFile.Log.Warn($"NOTICE: the late-order popup watcher failed ({e.GetType().Name}: {e.Message}); dropping it for this launch");
+            MainFile.Log.Warn($"{PrefixFor(_kind)}: the popup watcher failed ({e.GetType().Name}: {e.Message}); dropping it for this launch");
             QueueFree();
         }
     }
+
+    /// <summary>Per-kind log prefix, so the acceptance script can scope each notice's assertions.</summary>
+    private static string PrefixFor(NoticeKind kind) =>
+        kind == NoticeKind.LateOrder ? "NOTICE" : "NOTICE-SUCCESS";
 }

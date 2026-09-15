@@ -7,7 +7,7 @@
 	"title"		"RegentFX Fast Boot (万象辉星启动加速)"
 	"description"		"[h1]RegentFX Fast Boot(万象辉星启动加速)[/h1]
 
-[i]Conditional boot-stall fix for RegentFX. It requires a specific load order, it does not work at every mod position, and it never reorders your mods or writes your settings. When a launch cannot be accelerated, it says so in a one-shot popup on the main menu.[/i]
+[i]Conditional boot-stall fix for RegentFX. It requires a specific load order, it does not work at every mod position, and it never reorders your mods or writes your settings. Whether the launch was accelerated or not, a one-shot popup on the main menu tells you which happened.[/i]
 
 [hr]
 
@@ -38,6 +38,7 @@
 [*][b]关键步骤:设置加载顺序.[/b]游戏本体的模组界面[b]没有[/b]调整顺序的功能(只有启用/禁用勾选),所以顺序必须由调序工具写入.推荐 [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3747605109]Load Order Manager[/url]:装好后在模组界面点"加载顺序",把 RegentFXFastBoot 移到 RegentFX [b]上面[/b],点"应用",重启游戏生效.
 [*][b]另请确认本 mod 只装了一份.[/b]本地副本与工坊副本同时存在时,引擎会在列表尾部写回第二行同名记录;排序只按 id 取[b]最后一行[/b]的位置,那一行会覆盖启用行的位置,导致每次启动都晚序.
 [*]未安装 RegentFX 时本 mod 保持待命,不做任何事
+[*][b]加速成功时的弹窗[/b]:若本次启动确实被加速(全部场景提交完成、至少预热了一个、无失败),进入主菜单后会弹一次提示窗,告知预热了多少个场景以及启动卡顿已消失;只有一个“知道了”按钮,无需任何操作。部分成功或有失败时不会弹此窗,避免夸大实际效果。
 [*][b]加速失败时的弹窗[/b]:若本次启动无法加速(RegentFX 先加载,同步预加载已经发生且无法撤回),进入主菜单后会弹一次提示窗,说明上面这四步,并提供两个按钮:[b]使生效[/b](打开 Load Order Manager 的工坊页面并显示步骤)与[b]不再提示[/b](记住选择,之后不再弹)。弹窗不写任何设置,不重排任何 mod;选"不再提示"后加速功能保持待命,之后若顺序修好仍会自动生效。
 [/list]
 
@@ -49,6 +50,6 @@
 [*][b]配合[/b]:[url=https://steamcommunity.com/sharedfiles/filedetails/?id=3747497501]RegentFX[/url](未安装则本 mod 无事可做)
 [*]v0.2.0 起不再依赖 BaseLib(经二进制核查,本 mod 的 DLL 对 BaseLib 的运行时引用为零)
 [/list]"
-	"changenote"		"v0.3.0: the failure is no longer silent. When a launch cannot be accelerated because RegentFX loaded first, RegentFXFastBoot now shows a one-shot popup on the main menu explaining why nothing was accelerated and what to do about it, with two buttons: 'apply' (opens the Load Order Manager Workshop page and shows the concrete steps) and 'do not show again' (recorded in the mod's own state file under the game's user data directory; the acceleration stays armed and still takes effect if the order is fixed later). The popup writes no settings and reorders no mods - the order is still set by you, through a load-order editor. Shown at most once: it is only recorded after it has actually been displayed, so a launch where it could not be shown offers it again next time. Also carried over from 0.2.1: the corrected install instructions (the vanilla modding screen has no reorder control; use Load Order Manager, Workshop 3747605109) and the single-install rule."
+	"changenote"		"v0.4.0: the success is no longer silent either. When a launch IS accelerated, the mod now says so with a one-shot popup on the main menu: how many scenes were warmed and that the boot stall from RegentFX's synchronous preload is gone. It appears only on a genuine success - the whole queue submitted, at least one scene actually warmed, nothing failed - and it never claims a saving that did not happen. One button, 'OK', no action required. The failure popup from 0.3.0 is unchanged and still offers 'apply' (opens the Load Order Manager Workshop page) and 'do not show again'. Each notice has its own one-shot flag in the mod's state file under the game's user data directory, so seeing one never suppresses the other. Neither popup writes your game settings - the only file the mod writes is its own notice state - and neither reorders your mods."
 	"publishedfileid"		"3799305611"
 }

@@ -597,3 +597,74 @@ RFX 的本地副本**已删除**,字典无该 id,所以工坊副本不会被禁�
 `Waiting for confirmation` -> `Timed out waiting for confirmation` -> `ERROR (Timeout)`,`workshop_log` 无上传行.
 工坊仍为 0.2.0.五次尝试(02:46 / 03:11 / 03:2x / 04:4x / 05:1x)形态完全一致,
 确认是 Steam 侧要求设备确认,非内容或 VDF 问题.
+
+---
+
+## 2026-09-16 (RFX-4) 成功也弹窗 + 两条被验证的根因(用户新需求)
+
+### 需求(用户 2026-09-16 指示)
+
+"成功加速后再弹窗一次告知用户".此前加速成功是**完全静默**的:玩家无从判断这个 mod 到底做了事没有.
+与 RFX-3 的失败弹窗合并为一套机制,而不是复制一份.
+
+### 实现:泛化而非复制
+
+`NoticeKind { LateOrder, Succeeded }` + 同一个 `ModNotice` 模态 + 同一套 `ModNoticeWatcher` 宿主 + 同一份一次性记账.
+泛化是刻意的:关闭路径带着 `NModalContainer.Clear()` 会误杀引擎模态的隐患,复制一份就是第二次犯错的机会.
+
+| 文件 | 变化 |
+|---|---|
+| `LateOrderNotice.cs` -> `ModNotice.cs` | 加入 `NoticeKind`;正文/按钮集按 kind 分支(失败=两按钮+步骤,成功=单个"知道了");新增 `PrefixFor(kind)`. |
+| `LateOrderNoticeWatcher.cs` -> `ModNoticeWatcher.cs` | `Schedule(kind, warmed)`;日志按 kind 分前缀. |
+| `NoticeState.cs` | 单标志 -> 双标志(`noticeShown` / `successShown`). |
+| `MainFile.cs` | 晚序接入点改为 `Schedule(NoticeKind.LateOrder)`;`CompleteWarmUp` 内新增成功接入点. |
+
+**成功触发条件刻意收窄**:`_warmed > 0 && FailedPaths.Count == 0 && Pending.Count == 0`.
+部分完成或有失败时不弹 - 此弹窗绝不能宣称一个没有发生的节省.
+`_warmed == 0` 的零工作早退分支根本不会走到 `CompleteWarmUp`(根本没建预热节点),
+所以"RegentFX 的预加载本来就会是空操作"的那次启动同样保持静默.
+
+### 两条真实缺陷(在写代码时就被外部审查点出,均已修)
+
+1. **整文件覆写会互相抹除**:`MarkShown` 是 `File.WriteAllText`,只写刚变化的标志会抹掉另一个标志,
+   让被抑制的弹窗复活.现在**每次写入都写两个标志的并集**.
+2. **裸搜 `true` 会串键**:原 `IsShown` 是 `Contains("noticeShown") && Contains("true")`,
+   在双键共存时会把 `{"noticeShown": false, "successShown": true}` 读成"失败弹窗已显示过",
+   静默压掉本该出现的那个.现在按键精确匹配 `"<key>"\s*:\s*true`.
+
+第 2 条是那种"不会报错、只会让功能静默失效"的缺陷,正是验收脚本必须能抓住的东西 - 见下.
+
+### 验收脚本:两个通知的前缀分域(第三个真实缺陷)
+
+`tools/verify-fastboot-order.ps1` 原先用**未分域**的模式:`'NOTICE: one-shot state recorded'` /
+`'already shown in an earlier launch'`.成功路径发的是 `NOTICE-SUCCESS:` 前缀,两个模式都不命中,
+于是成功弹窗真的显示过时,脚本会落进 else 分支、因 `'already shown in an earlier launch'` 命中而
+输出 `notice correctly suppressed` - **把"显示了"说成"已抑制"**,结论与事实相反.
+
+现在:失败弹窗用 `NOTICE:`,成功弹窗用 `NOTICE-SUCCESS:`,两个前缀互不为子串,断言全部按前缀分域.
+新增第 4 节断言(成功弹窗),并且它检查的是**契约**而不是某一次的具体结果:
+
+- 每次启动最多显示一次;
+- 显示过则一次性状态必须记录(状态文件按**各自**的键检查,不看裸 `true`);
+- **弹窗不得宣称日志不支持的成功**:交叉核对 `COMPLETED ... warmed=N failed=N notSubmitted=N`,
+  要求 `warmed>0 && failed==0 && notSubmitted==0`,且**弹窗文本里的场景数必须等于日志里的 N**;
+- 丢弃路径按前缀分别报告(`main menu did not appear within` / `engine's modal slot stayed busy for`).
+
+**11 个夹具全部按预期**:其中 `both-mixed`(失败弹窗已抑制 + 成功弹窗本次显示)与
+`succ-dropped`(成功弹窗被丢弃,不得被算成失败弹窗被丢弃)正是针对上面那个误判构造的.
+
+### 验证状态(诚实声明)
+
+- 构建:0 错误(仅预存在的 `CS0436` x2).重建两次字节一致,`5afbf4b85e143c32`(57856 B).
+- 载荷核验:US 堆逐串 diff,新增 51 条 / 移除 21 条,**全部是本次改动的字符串**
+  (成功文案、kind 泛化、正则、双键名);**无** `ModList`/`SaveSettings`/`SettingsSaveMod`/`SettingsSave` 写入面 -
+  唯一的 `SettingsSave` 触碰是读 `Language`,`WriteAllText` 唯一调用点是 `notice.json`.
+- `refresh-workshop-payloads.ps1` exit 0(8/8 ALREADY_CURRENT);`test-push-verification.ps1` 9 passed / 0 failed.
+- **未做实机验证**:弹窗的真实外观/点击/关闭需要启动游戏,尚未授权运行.这是本项唯一未验证环节.
+- live 工坊仍为 0.2.0,`check-live-payload.ps1` 报 STALE(正确,尚未推送).
+
+### 顺带修掉的一处陈旧说明
+
+`DEVELOP.md` 第 5 步原先写"早序运行日志里不应出现任何 `NOTICE:` 行".
+该断言对 RFX-4 已**不成立** - 成功弹窗恰恰只在成功的早序运行触发.
+现已改为:失败弹窗不出现(前缀 `NOTICE:` 专有),但成功弹窗会首次出现,并给出预期的四行 `NOTICE-SUCCESS:` 链.

@@ -1,9 +1,11 @@
 # verify-fastboot-order.ps1 - acceptance check for the RegentFXFastBoot load-order fix.
 #
-# Run AFTER a game launch. Verifies three independent things:
+# Run AFTER a game launch. Verifies four independent things:
 #   1. settings.save holds exactly one RegentFXFastBoot row, above RegentFX.
 #   2. godot.log shows an EARLY activation: no LATE-ORDER, and the ARMED/INTERCEPTED/WARMED chain.
 #   3. the late-order notice behaved (RFX-3): shown at most once, with its one-shot state recorded.
+#   4. the success notice behaved (RFX-4): shown at most once, backed by the log's own warm-up
+#      outcome, with its own one-shot state recorded.
 #
 # Exit codes: 0 = pass, 1 = fail, 2 = nothing to check (no log / game running).
 #
@@ -110,16 +112,20 @@ if (-not (Test-Path $logPath)) {
     #   - it is shown at most once per launch;
     #   - if it was shown, its one-shot state was recorded, so it cannot reappear;
     #   - if it could not be shown, that is reported rather than silently swallowed.
+    #
+    # Every pattern here is scoped by the notice's own log prefix. The two notices share one
+    # modal and one state file, so an unscoped grep would attribute a success line to the
+    # late-order notice. "NOTICE:" only matches when a colon follows immediately, which the
+    # success prefix ("NOTICE-SUCCESS:") never does - the prefixes are disjoint by construction.
     $noticeShown = ([regex]::Matches($log, 'NOTICE: late-order popup shown')).Count
-    $noticeScheduled = ([regex]::Matches($log, 'NOTICE: late-order popup scheduled')).Count
+    $noticeScheduled = ([regex]::Matches($log, 'NOTICE: popup scheduled')).Count
     $noticeStateOk = ([regex]::Matches($log, 'NOTICE: one-shot state recorded')).Count
-    $noticeStateFail = ([regex]::Matches($log, 'one-shot state could not be written')).Count
-    $noticeAlready = ([regex]::Matches($log, 'already shown in an earlier launch')).Count
-    # Matches the payload's actual wording. The drop lines are interpolated, so the stable
-    # substring is "is dropped for this launch" (the full literal in the DLL reads
-    # ".. the late-order popup is dropped for this launch"); a pattern that assumed
-    # "popup is dropped for this launch" would never match.
-    $noticeDropped = ([regex]::Matches($log, 'is dropped for this launch')).Count
+    $noticeStateFail = ([regex]::Matches($log, 'NOTICE: the notice was shown but its one-shot state could not be written')).Count
+    $noticeAlready = ([regex]::Matches($log, 'NOTICE: popup already shown in an earlier launch')).Count
+    # The drop lines are interpolated, so they are matched by their stable opening clause and
+    # scoped by the notice prefix. An unscoped 'is dropped for this launch' would also match
+    # the success notice's drop line and report it as a dropped late-order notice.
+    $noticeDropped = ([regex]::Matches($log, 'NOTICE: the (main menu did not appear within|engine''s modal slot stayed busy for)')).Count
 
     if ($noticeShown -gt 1) {
         $fail.Add("the late-order notice was shown $noticeShown times in one launch; it must be shown at most once")
@@ -136,30 +142,93 @@ if (-not (Test-Path $logPath)) {
     } else {
         # Not shown. That is correct for an early-order run, and acceptable (reported) otherwise.
         if ($noticeAlready -ge 1) {
-            $pass.Add('notice correctly suppressed: already shown in an earlier launch')
+            $pass.Add('late-order notice correctly suppressed: already shown in an earlier launch')
         } elseif ($noticeDropped -ge 1) {
-            Write-Result 'NOTE' 'the notice was scheduled but could not be shown this launch (it is offered again next launch)'
+            Write-Result 'NOTE' 'the late-order notice was scheduled but could not be shown this launch (it is offered again next launch)'
         } elseif ($noticeScheduled -ge 1) {
-            Write-Result 'NOTE' 'the notice was scheduled but no outcome line was logged; check the NOTICE: lines in godot.log'
+            Write-Result 'NOTE' 'the late-order notice was scheduled but no outcome line was logged; check the NOTICE: lines in godot.log'
         } else {
-            $pass.Add('no notice scheduled (correct for an early-order run)')
+            $pass.Add('no late-order notice scheduled (correct for an early-order run)')
         }
         if ($noticeStateFail -ge 1) {
-            $fail.Add('the notice was shown but its one-shot state file could not be written')
+            $fail.Add('the late-order notice was shown but its one-shot state file could not be written')
         }
     }
 
-    # The notice state file is the durable half of the one-shot contract.
+    # --- 4. success notice (RFX-4) ------------------------------------------
+    # Scheduled only when the warm-up ran to completion with warmed>0 and nothing failed, so
+    # an early-order run shows it once and later runs suppress it. The assertions below check
+    # the CONTRACT (at most once, state recorded, never claiming a success the log does not
+    # support) rather than a particular one-time outcome, because either is legitimate
+    # depending on whether it has already been shown on this machine.
+    $succShown = ([regex]::Matches($log, 'NOTICE-SUCCESS: popup shown')).Count
+    $succScheduled = ([regex]::Matches($log, 'NOTICE-SUCCESS: popup scheduled')).Count
+    $succStateOk = ([regex]::Matches($log, 'NOTICE-SUCCESS: one-shot state recorded')).Count
+    $succAlready = ([regex]::Matches($log, 'NOTICE-SUCCESS: popup already shown in an earlier launch')).Count
+    $succStateFail = ([regex]::Matches($log, 'NOTICE-SUCCESS: the notice was shown but its one-shot state could not be written')).Count
+    $succDropped = ([regex]::Matches($log, 'NOTICE-SUCCESS: the (main menu did not appear within|engine''s modal slot stayed busy for)')).Count
+    # The warm-up outcome the popup is allowed to describe.
+    $completed = [regex]::Match($log, 'COMPLETED \([^)]*\): warmed=(\d+), alreadyCached=(\d+), failed=(\d+), notSubmitted=(\d+)')
+
+    if ($succShown -gt 1) {
+        $fail.Add("the success notice was shown $succShown times in one launch; it must be shown at most once")
+    } elseif ($succShown -eq 1) {
+        $pass.Add('success notice shown once')
+        if ($succStateOk -ge 1) {
+            $pass.Add('success one-shot state recorded')
+        } else {
+            $fail.Add('the success notice was shown but no one-shot state was recorded; it may appear again next launch')
+        }
+        # The popup must not claim an acceleration the log does not evidence.
+        if (-not $completed.Success) {
+            $fail.Add('the success notice was shown but godot.log has no COMPLETED line; the popup must only fire on a completed warm-up')
+        } else {
+            $warmedN = [int]$completed.Groups[1].Value
+            $failedN = [int]$completed.Groups[3].Value
+            $pendingN = [int]$completed.Groups[4].Value
+            if ($warmedN -lt 1 -or $failedN -ne 0 -or $pendingN -ne 0) {
+                $fail.Add("the success notice was shown but the warm-up was warmed=$warmedN failed=$failedN notSubmitted=$pendingN; it must only fire on warmed>0, failed=0, notSubmitted=0")
+            } else {
+                $pass.Add("success notice backed by the log: warmed=$warmedN failed=0 notSubmitted=0")
+            }
+            # The count in the popup text must equal the count the log reports.
+            $claimed = [regex]::Match($log, 'acceleration ran and (\d+) scene\(s\) were warmed')
+            if ($claimed.Success -and [int]$claimed.Groups[1].Value -ne $warmedN) {
+                $fail.Add("the success popup claimed $($claimed.Groups[1].Value) warmed scene(s) but the log reports $warmedN")
+            }
+        }
+    } else {
+        if ($succAlready -ge 1) {
+            $pass.Add('success notice correctly suppressed: already shown in an earlier launch')
+        } elseif ($succDropped -ge 1) {
+            Write-Result 'NOTE' 'the success notice was scheduled but could not be shown this launch (it is offered again next launch)'
+        } elseif ($succScheduled -ge 1) {
+            Write-Result 'NOTE' 'the success notice was scheduled but no outcome line was logged; check the NOTICE-SUCCESS: lines in godot.log'
+        } else {
+            $pass.Add('no success notice scheduled')
+        }
+        if ($succStateFail -ge 1) {
+            $fail.Add('the success notice was shown but its one-shot state file could not be written')
+        }
+    }
+
+    # The notice state file is the durable half of the one-shot contract. Two independent
+    # flags share it, so each is checked against its OWN key - a bare search for "true" would
+    # read {"noticeShown": false, "successShown": true} as "the late-order notice was shown".
     $noticeFile = Join-Path $UserDataRoot 'RegentFXFastBoot\notice.json'
     if (Test-Path $noticeFile) {
         $noticeJson = Get-Content $noticeFile -Raw -Encoding UTF8
-        if ($noticeJson -match '"noticeShown"\s*:\s*true') {
-            $pass.Add("notice state file present and set: $noticeFile")
-        } else {
-            $fail.Add("notice state file exists but does not record noticeShown=true: $noticeFile")
+        $lateRecorded = $noticeJson -match '"noticeShown"\s*:\s*true'
+        $succRecorded = $noticeJson -match '"successShown"\s*:\s*true'
+        $pass.Add("notice state file present: noticeShown=$lateRecorded successShown=$succRecorded")
+        if ($noticeShown -ge 1 -and -not $lateRecorded) {
+            $fail.Add("the log says the late-order notice was shown but the state file does not record noticeShown=true: $noticeFile")
         }
-    } elseif ($noticeShown -ge 1) {
-        $fail.Add("the log says the notice was shown but no state file exists at $noticeFile")
+        if ($succShown -ge 1 -and -not $succRecorded) {
+            $fail.Add("the log says the success notice was shown but the state file does not record successShown=true: $noticeFile")
+        }
+    } elseif ($noticeShown -ge 1 -or $succShown -ge 1) {
+        $fail.Add("the log says a notice was shown but no state file exists at $noticeFile")
     }
 
     # LATE-ORDER is only meaningful for the run that just happened; flag a stale log.

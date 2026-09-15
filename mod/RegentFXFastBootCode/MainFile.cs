@@ -24,8 +24,10 @@ namespace RegentFXFastBoot.RegentFXFastBootCode;
 /// If this launch is DEFINITIVELY late order, the failure is reported to the player as well
 /// as to the log (RFX-3, 2026-09-16): a one-shot modal on the main menu explains why nothing
 /// was accelerated and offers (a) the instructions for making it take effect, and (b) "do
-/// not show again". The notice writes no settings and reorders nothing; it records its own
-/// one-shot state in its own file. See LateOrderNotice / LateOrderNoticeWatcher.
+/// not show again". If the warm-up instead ran to completion with nothing failed, a one-shot
+/// success modal says so (RFX-4, 2026-09-17). Neither notice writes settings and neither
+/// reorders anything; each records its own one-shot flag in the mod's state file.
+/// See ModNotice / ModNoticeWatcher / NoticeState.
 ///
 /// The order has to be set OUTSIDE this mod, and the ENGINE ALONE CANNOT EXPRESS IT. The
 /// modding screen has no reorder control: NModdingScreen/NModMenuRow only ever write
@@ -283,7 +285,7 @@ public partial class MainFile : Node
                     // schedules it: Early and Unknown may still succeed this launch, and a
                     // popup would then be wrong. Scheduling is best-effort and cannot fail
                     // the launch (it logs and returns).
-                    LateOrderNoticeWatcher.Schedule();
+                    ModNoticeWatcher.Schedule(NoticeKind.LateOrder);
                     return;
                 }
 
@@ -972,6 +974,20 @@ public partial class MainFile : Node
                 "pre-warmed; RegentFX's lazy first-consumer path (VFXUtil.GenVFXNode -> PreloadManager.Cache.GetScene) serves " +
                 "them at first use.");
         }
+
+        // RFX-4 (2026-09-17): on genuine success the player is told, once. The acceleration
+        // otherwise changes boot behaviour silently, so the player cannot tell whether the mod
+        // did anything. "Genuine success" is deliberately narrow - the whole queue was
+        // submitted, at least one path was actually warmed, and none failed. A partial stop or
+        // any failure stays silent here because the late-order notice's territory is the
+        // failure path, and this notice must never claim a saving that did not happen.
+        // The zero-work early return above never reaches this method at all (no warmer node is
+        // created), so a launch where RegentFX's preload would have been a no-op is silent too.
+        if (_warmed > 0 && FailedPaths.Count == 0 && Pending.Count == 0)
+        {
+            ModNoticeWatcher.Schedule(NoticeKind.Succeeded, _warmed);
+        }
+
         QueueFree();
     }
 
