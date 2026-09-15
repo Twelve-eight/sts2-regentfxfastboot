@@ -68,20 +68,22 @@ RFX **必须早于** RegentFX 加载,否则 `LoadScenes` 前缀装上时初始�
 弹窗**只在确定性晚序**被调度(`LateOrderNoticeWatcher.Schedule()` 仅出现在
 `ModSceneCache.Count > 0` 分支),所以观察它必须发生在修好顺序**之前**:
 
-0. **先跑 `tools/check-live-payload.ps1`(exit 0 才继续)**.工坊订阅下载是**异步**的:
-   推送被接受不等于 live 副本已更新,而 `refresh-workshop-payloads.ps1`(查仓库暂存树)与
-   steamcmd 日志(只证明上传被接受)**都不看 live 副本**.若在此窗口启动,跑的是旧 DLL,
-   "没看到弹窗"就是**假阴性**.该脚本按哈希比对 live 与暂存,并在哈希不同但仅内嵌版本串不同时
-   正确放行(provenance 差异不是代码差异).
-1. 推出 0.3.0(或覆盖工坊内容目录),使实机加载的是含弹窗的 DLL.
-2. **在顺序仍然错误的状态下启动游戏**(此时 `settings.save` 为 RFX@50 vs RegentFX@27,仍晚序):
+1. 推出 0.3.0(或覆盖工坊内容目录).
+2. **跑 `tools/check-live-payload.ps1`,exit 0 才继续**.
+   工坊订阅下载是**异步**的:推送被接受不等于 live 副本已更新,而
+   `refresh-workshop-payloads.ps1`(查仓库暂存树)与 steamcmd 日志(只证明上传被接受)
+   **都不看 live 副本**.在此窗口启动会跑旧 DLL,"没看到弹窗"就是**假阴性**.
+   该脚本按哈希比对 live 与暂存,并在"哈希不同但代码级字符串一致、仅内嵌版本串不同"时
+   正确放行(provenance 差异不是代码差异).**此步必须在第 1 步之后** - 推送前 live 仍是旧版,
+   门禁会(正确地)报 STALE.
+3. **在顺序仍然错误的状态下启动游戏**(此时 `settings.save` 为 RFX@50 vs RegentFX@27,仍晚序):
    进主菜单后应出现一次弹窗,然后退出.预期日志:
    `NOTICE: late-order popup scheduled` -> `NOTICE: late-order popup shown on the main menu` ->
    `NOTICE: one-shot state recorded at ..`;预期文件:
    `%APPDATA%/SlayTheSpire2/RegentFXFastBoot/notice.json`(内容 `{"noticeShown": true}`).
    这一次启动同时会清掉 `settings.save` 里的陈旧行(见下),不要为此重复启动.
-3. 之后才用 LOM 打开"加载顺序",把唯一那条 `RegentFXFastBoot` 移到 `RegentFX` 上方,点"应用".
-4. 重启验证加速生效:`tools/verify-fastboot-order.ps1` 应 exit 0(无 `LATE-ORDER`,出现
+4. 之后才用 LOM 打开"加载顺序",把唯一那条 `RegentFXFastBoot` 移到 `RegentFX` 上方,点"应用".
+5. 重启验证加速生效:`tools/verify-fastboot-order.ps1` 应 exit 0(无 `LATE-ORDER`,出现
    `ARMED`/`BOUND`/`INTERCEPTED`/`WARMED`),且此时**不应**再出现弹窗(日志应显示
    `already shown in an earlier launch`).
 
@@ -90,7 +92,7 @@ RFX **必须早于** RegentFX 加载,否则 `LoadScenes` 前缀装上时初始�
 
 **本机当前仍有两行 RFX**:`settings.save` 的 `idx 40` 是已删除本地副本的陈旧行
 (`mods_directory`),`idx 50` 是工坊行.`ModManager.Initialize` 每轮按 `_mods`(实际在场 mod)
-重建 `mod_list`,所以上面第 2 步那次启动会一并清除 idx 40,此后 LOM 只显示唯一一行.
+重建 `mod_list`,所以上面第 3 步那次启动会一并清除 idx 40,此后 LOM 只显示唯一一行.
 
 重建的前提已核实:`mod_list` 的重写位于 `if (_settings != null && _settings.PlayerAgreedToModLoading)`
 分支内(`ModManager.cs:135-148`),而 `PlayerAgreedToModLoading` 的序列化名是

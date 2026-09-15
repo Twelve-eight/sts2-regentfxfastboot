@@ -67,10 +67,16 @@ function Get-UserStrings([string]$path) {
     return $set
 }
 
-# Reads the AssemblyInformationalVersion string ("1.0.0+<sha>") out of the UTF-16 blob.
+# Reads the AssemblyInformationalVersion string ("1.0.0+<sha>") out of the UTF-8 metadata blob.
+#
+# Deliberately ASCII, NOT Unicode: the UTF-16 copy is what Get-UserStrings already compares,
+# so decoding UTF-16 here would compare the same bytes twice and always find them equal -
+# which made the caller's "no string differs" branch unable to ever return OK. ASCII decoding
+# skips the UTF-16 copy (its NUL interleaving breaks the pattern) and reads the metadata copy,
+# which is exactly the copy that can differ while every user string matches.
 function Get-EmbeddedVersion([string]$path) {
     $bytes = [System.IO.File]::ReadAllBytes($path)
-    $text = [System.Text.Encoding]::Unicode.GetString($bytes)
+    $text = [System.Text.Encoding]::ASCII.GetString($bytes)
     $m = [regex]::Match($text, '\d+\.\d+\.\d+\+[0-9a-f]{40}')
     if ($m.Success) { return $m.Value }
     return ''

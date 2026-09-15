@@ -530,3 +530,26 @@ staged : 223 strings  cb5cb518e093752c
 本地副本先入字典,工坊副本在**版本相同/未知或更低**时被禁用 -> **本地副本胜出**.
 RFX 的本地副本**已删除**,字典无该 id,所以工坊副本不会被禁用 -> 推 0.3.0 对本机有效.
 (其余 8 个 mod 的双份状态是用户自己的环境,不在本任务范围.)
+
+### 门禁脚本的两处修正(2026-09-16 04:4x)
+
+**1. `$allDiffs.Count -eq 0` 分支原本永远无法返回 OK(死分支)**
+
+`Get-EmbeddedVersion` 原先用 `Encoding::Unicode`(UTF-16)解码 - 而那正是 `Get-UserStrings` 已经比对过的副本,
+所以两侧版本串必然相等 -> 分支穿透到 STALE.已改为 `Encoding::ASCII`:ASCII 解码会跳过 UTF-16 副本
+(NUL 交错打断模式),读到的是**UTF-8 元数据副本**,恰是"所有用户字符串都相同、只有版本不同"时真正不同的那一份.
+实测(仅改 UTF-8 副本):`live-only 0 / staged-only 0` -> 读出两侧版本 -> `OK (provenance only)` exit 0.
+
+**2. 我此前把"仅版本差异放行"记成了修复一个缺陷 - 那是错的.**
+`capture.txt` 显示那次测试本身 `EXITCODE=0`、`live-only 1 / staged-only 1`,
+说明版本差异路径**当时已经工作**(补丁确实命中了 UTF-16 副本).
+我当时误判为脚本缺陷,实际只是我的 Python 补丁打在了另一份副本上.死分支是真缺陷,但它是**另一个**问题.
+
+**3. 验收顺序的自我阻塞已修正**:门禁原先写成第 0 步(在推送之前),而推送前 live 仍是旧版 ->
+门禁必然报 STALE -> 文档化流程自我阻塞.现已改为:第 1 步推送 -> 第 2 步门禁 -> 第 3 步启动看弹窗 ->
+第 4 步 LOM 调序 -> 第 5 步验证.
+
+### 上传:第四次尝试仍被阻塞
+
+`Waiting for confirmation` -> `Timed out waiting for confirmation` -> `ERROR (Timeout)`,`workshop_log` 无上传行.
+工坊仍为 0.2.0.需人工完成 Steam 设备确认.
