@@ -4,6 +4,7 @@ using Godot;
 
 using MegaCrit.Sts2.Core.Nodes.CommonUi;
 using MegaCrit.Sts2.Core.Nodes.Screens.ScreenContext;
+using MegaCrit.Sts2.addons.mega_text;
 
 namespace RegentFXFastBoot.RegentFXFastBootCode;
 
@@ -135,14 +136,14 @@ internal sealed partial class LateOrderNotice : Control, IScreenContext
         center.AddChild(panel);
 
         var margin = new MarginContainer();
-        margin.AddThemeConstantOverride("margin_left", 18);
-        margin.AddThemeConstantOverride("margin_top", 16);
-        margin.AddThemeConstantOverride("margin_right", 18);
-        margin.AddThemeConstantOverride("margin_bottom", 16);
+        margin.AddThemeConstantOverride(ThemeConstants.MarginContainer.MarginLeft, 18);
+        margin.AddThemeConstantOverride(ThemeConstants.MarginContainer.MarginTop, 16);
+        margin.AddThemeConstantOverride(ThemeConstants.MarginContainer.MarginRight, 18);
+        margin.AddThemeConstantOverride(ThemeConstants.MarginContainer.MarginBottom, 16);
         panel.AddChild(margin);
 
         var column = new VBoxContainer();
-        column.AddThemeConstantOverride("separation", 10);
+        column.AddThemeConstantOverride(ThemeConstants.BoxContainer.Separation, 10);
         // A minimum width is what makes the long body/steps text wrap into a readable block
         // instead of stretching the panel to one very wide line.
         column.CustomMinimumSize = new Vector2(620f, 0f);
@@ -154,7 +155,7 @@ internal sealed partial class LateOrderNotice : Control, IScreenContext
             HorizontalAlignment = HorizontalAlignment.Center,
             AutowrapMode = TextServer.AutowrapMode.WordSmart
         };
-        title.AddThemeFontSizeOverride("font_size", 22);
+        title.AddThemeFontSizeOverride(ThemeConstants.Label.FontSize, 22);
         column.AddChild(title);
 
         var body = new Label
@@ -173,7 +174,7 @@ internal sealed partial class LateOrderNotice : Control, IScreenContext
         _stepsLabel = steps;
 
         var buttons = new HBoxContainer { Alignment = BoxContainer.AlignmentMode.Center };
-        buttons.AddThemeConstantOverride("separation", 16);
+        buttons.AddThemeConstantOverride(ThemeConstants.BoxContainer.Separation, 16);
         column.AddChild(buttons);
 
         Button apply = MakeButton(Text.ApplyButton, OnApplyPressed);
@@ -218,7 +219,17 @@ internal sealed partial class LateOrderNotice : Control, IScreenContext
                 "This mod writes no settings and reorders nothing.");
             if (_stepsLabel != null && GodotObject.IsInstanceValid(_stepsLabel))
                 _stepsLabel.Text = Text.AppliedSteps;
-            OS.ShellOpen(LoadOrderManagerUrl);
+            // ShellOpen returns Godot.Error (the engine itself ignores it, at
+            // SteamPlatformUtilStrategy.cs:112). Here the result is worth reporting: the
+            // steps text is the real payload, and telling the player the browser did not
+            // open prevents them waiting for a page that will never appear.
+            Godot.Error openResult = OS.ShellOpen(LoadOrderManagerUrl);
+            if (openResult != Godot.Error.Ok)
+            {
+                MainFile.Log.Warn($"NOTICE: the browser could not be opened ({openResult}); the steps are shown in the popup instead");
+                if (_stepsLabel != null && GodotObject.IsInstanceValid(_stepsLabel))
+                    _stepsLabel.Text = Text.AppliedStepsNoBrowser;
+            }
         }
         catch (Exception e)
         {
@@ -342,6 +353,13 @@ internal sealed partial class LateOrderNotice : Control, IScreenContext
             : "The Load Order Manager Workshop page has been opened in your browser. If it did not open, search Workshop " +
               "3747605109. After subscribing, open Modding -> Load Order, move RegentFXFastBoot above RegentFX, press Apply, " +
               "then restart the game.";
+
+        internal static string AppliedStepsNoBrowser => Chinese
+            ? "\u6D4F\u89C8\u5668\u672A\u80FD\u6253\u5F00\u3002\u8BF7\u5728\u5DE5\u574A\u641C\u7D22 Load Order Manager\uFF083747605109\uFF09\uFF0C" +
+              "\u8BA2\u9605\u540E\u8FDB\u6A21\u7EC4\u754C\u9762\u70B9\u201C\u52A0\u8F7D\u987A\u5E8F\u201D\uFF0C" +
+              "\u628A RegentFXFastBoot \u79FB\u5230 RegentFX \u4E0A\u9762\uFF0C\u70B9\u201C\u5E94\u7528\u201D\uFF0C\u7136\u540E\u91CD\u542F\u6E38\u620F\u3002"
+            : "The browser could not be opened. Search the Workshop for Load Order Manager (3747605109); after subscribing, " +
+              "open Modding -> Load Order, move RegentFXFastBoot above RegentFX, press Apply, then restart the game.";
 
         private static bool IsChineseLanguage()
         {

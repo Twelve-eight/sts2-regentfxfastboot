@@ -553,3 +553,28 @@ RFX 的本地副本**已删除**,字典无该 id,所以工坊副本不会被禁�
 
 `Waiting for confirmation` -> `Timed out waiting for confirmation` -> `ERROR (Timeout)`,`workshop_log` 无上传行.
 工坊仍为 0.2.0.需人工完成 Steam 设备确认.
+
+### 弹窗实现的三处加固(2026-09-16 05:0x,提交前静态核验)
+
+**1. 主题常量改用引擎的 `ThemeConstants`**(替换 7 处裸字符串).
+依据:`MegaCrit.Sts2.addons.mega_text/ThemeConstants.cs` - `MarginLeft/Top/Right/Bottom`("margin_left" 等,
+属 `MarginContainer`),`BoxContainer.Separation`("separation"),`Label.FontSize`("font_size").
+改用常量后,**载荷内裸字符串计数为 0**(实测 `margin_left`/`separation` 各 0 次),拼写漂移风险消除.
+
+**2. `OS.ShellOpen` 返回值现在被处理.**
+签名实测是 `Godot.Error ShellOpen(System.String)`(非 `void`) - 引擎自身忽略它
+(`SteamPlatformUtilStrategy.cs:112`),但这里值得上报:浏览器打不开时提示用户
+("浏览器未能打开,请在工坊搜索 .."),避免用户干等一个永远不会出现的页面.
+新增 `Text.AppliedStepsNoBrowser`(中英双语).
+
+**3. 引擎 API 成员与可见性已核验**:`NModalContainer.Instance`(public static,可空)、
+`OpenModal`(public)、`Add(Node, bool)`(public)、`Clear()`(public)、
+`IScreenContext.DefaultFocusedControl`(public,单成员接口).一次 grep 即定.
+
+**未采纳的做法**:曾搭了一个 `MetadataLoadContext` 检查工具去反射校验引擎 API,
+但它提供的信息**编译期已经保证**(csproj 直接引用游戏自身的 `sts2.dll`/`GodotSharp`,
+成员存在性与签名兼容性由编译器证明),而编译覆盖不到的运行时风险(`Instance` 为空、
+布局/可见性、静态初始化顺序)元数据同样答不了.已删除该工具,不留多余产物.
+
+当前载荷:DLL `59a03fc6afac3ac3`(54272 B),PDB `a3a964dc31a4dbd0`,json 不变 `39ef4122bb5685dc`.
+契约检查:DLL 内**无** `ModList`/`SaveSettings`/`SettingsSaveMod` 引用(不写用户配置);中文串全部就位(UTF-16 命中 5 组).
