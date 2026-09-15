@@ -1,12 +1,16 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Threading.Tasks;
 
 using Godot;
 using HarmonyLib;
 
+using MegaCrit.Sts2.Core.Assets;
 using MegaCrit.Sts2.Core.Logging;
 using MegaCrit.Sts2.Core.Modding;
+using MegaCrit.Sts2.Core.Nodes;
 
 namespace RegentFXFastBoot.RegentFXFastBootCode;
 
@@ -52,7 +56,29 @@ namespace RegentFXFastBoot.RegentFXFastBootCode;
 ///                          queued; original preload suppressed (only when ALL
 ///                          prerequisites resolved; otherwise it is left enabled).
 ///   Queued  -> Attached    warmer node actually entered the live NGame's tree.
-///   Attached -> Completed  queue drained; per-path outcomes reported.
+///   Attached -> Completed  optional work ended: the queue drained, or the launch stopped
+///                          submitting (left the main menu, owner gone). Per-path outcomes
+///                          are reported; a stop is never reported as a boot saving.
+///
+/// Scheduling (RFX-2, 2026-09-15). The warm-up no longer calls synchronous
+/// ResourceLoader.Load per frame. It submits through the engine's OWN coordination surface,
+/// NAssetLoader/AssetLoadingSession, and follows that surface's rules:
+///  - The live NAssetLoader node is resolved from the running NGame's tree, never through
+///    NAssetLoader.Instance - that getter fabricates an unattached node before _Ready runs.
+///  - At most ONE optional request is outstanding at any time, and it is a single-path
+///    session. The next path is submitted only after the previous request is consumed, so
+///    optional work never bursts in front of the engine's required loading.
+///  - Requests are submitted only while the main menu is the current scene (menu idle). A
+///    request already in flight is always observed to completion, because Godot exposes no
+///    cancellation for it; nothing further is submitted after the menu is left.
+///  - The scratch Resource cache is bounded to that one path and dropped after publication;
+///    the published PackedScene stays alive through RegentFX's ModSceneCache.
+///  - The engine session already loads /vfx/ scenes serially with useSubThreads=false, so
+///    the serial VFX rule is preserved by construction; Stardust.tscn rides the same
+///    single-path session even though its path has no /vfx/ segment.
+///  - Task completion is NOT load success (the session completes even when individual paths
+///    failed), so the scratch cache and a PackedScene.CanInstantiate check decide what is
+///    published, and every unusable path is recorded.
 /// Order provenance is tracked separately and distinctly: Early (bound from AssemblyLoad),
 /// Unknown (RegentFX assembly already loaded at our initializer; whether its initializer
 /// ran is not observable, so the binding is installed but may never fire), Late (definitive:
@@ -80,6 +106,12 @@ namespace RegentFXFastBoot.RegentFXFastBootCode;
 ///    own _Process draining the queue; cleanup = QueueFree on Completed, or freed with
 ///    NGame at teardown. Exactly one node is ever created per launch (only on the
 ///    Queued transition with a non-empty queue).
+///  - Optional warm-up request (RFX-2): producer = the warmer's own _Process while the main
+///    menu is idle; owner = this mod, running on the live NGame; first consumer =
+///    NAssetLoader._Process in the engine main loop; cleanup = the per-request scratch cache
+///    is dropped after publication and the request is observed to completion even after the
+///    menu is left. At most one outstanding; no task continuation is registered, so no
+///    callback can outlive the node or a torn-down NGame.
 /// </summary>
 [ModInitializer(nameof(Initialize))]
 public partial class MainFile : Node
@@ -94,6 +126,14 @@ public partial class MainFile : Node
     private const string CollectorName = "CollectAssetPathsSafely";
     private const string WarmerNodeName = "RegentFXFastBootWarmer";
     private const int AttachRetryFrameLimit = 900;
+
+    // RFX-2 bounds. Frame-counted, matching the existing AttachRetryFrameLimit convention.
+    // Both bound only the WAIT for a condition to become reachable. An accepted request is
+    // never timed out: Godot exposes no cancellation for it, so it is observed to completion.
+    private const int LoaderResolveFrameLimit = 600; // ~10s at 60fps: live loader never appeared
+    private const int MenuWaitFrameLimit = 3600;     // ~60s at 60fps: menu never became current
+    private const int LoaderSearchNodeBudget = 512;  // max nodes visited per resolve attempt
+    private const string SessionNamePrefix = "RegentFXFastBoot optional";
 
     /// <summary>Spine of the warm-up lifecycle; every value is committed after success.</summary>
     private enum BindPhase
@@ -142,6 +182,20 @@ public partial class MainFile : Node
     private static readonly List<string> FailedPaths = new();
     private static int _warmed;
     private static int _alreadyCached;
+
+    // RFX-2 optional-request state, all instance-level on the warmer node: every field dies
+    // with the node, so no static state can outlive the launch or leak into a later one.
+    private NAssetLoader? _liveLoader;     // the live loader resolved from the running NGame's tree
+    private int _loaderWaitFrames;        // frames spent waiting for the live loader to appear
+    private int _menuWaitFrames;          // frames spent waiting for the main menu to become current
+    private bool _loaderResolved;
+    private bool _loaderRetired;          // terminal: never retry a resolve, never submit again
+    private string? _retireReason;        // why the loader became unusable, reported once
+    private bool _menuSeen;               // the main menu has been the current scene at least once
+    private bool _requestActive;
+    private Task<bool>? _activeTask;
+    private string? _activePath;
+    private ConcurrentDictionary<string, Resource>? _scratchCache; // bounded to the one in-flight path
 
     // Bounded NGame.Instance retry state (see class doc, ProcessFrame entry).
     private static SceneTree? _retryTree;
@@ -478,8 +532,9 @@ public partial class MainFile : Node
     /// prefix time without constructing or patching NGame. The add_child is submitted via
     /// CallDeferred, which is valid whether the prefix runs inside NGame._EnterTree's call
     /// stack or in a post-_EnterTree continuation of the async GameStartup, and is
-    /// main-thread-safe by engine contract. This mod does not wait for menu readiness
-    /// before draining: the drain yields every frame, and RFX-2 owns any scheduling change.
+    /// main-thread-safe by engine contract. Attachment itself does not wait for menu
+    /// readiness; the warmer's _Process decides when optional work may start (see the
+    /// scheduling paragraph in the class doc).
     /// </summary>
     private static bool TryAttachWarmer()
     {
@@ -583,52 +638,294 @@ public partial class MainFile : Node
         if (_phase != BindPhase.Attached)
             return;
 
-        if (Pending.Count == 0)
+        // At most ONE optional request is ever outstanding. While one is in flight nothing
+        // else is submitted: the engine serializes sessions, and a second enqueue would put
+        // optional work in front of the engine's own required loading.
+        if (_requestActive)
         {
-            // The last item was processed in a previous frame; the drain finished.
-            _phase = BindPhase.Completed;
-            Log.Info($"COMPLETED: warm-up queue drained. warmed={_warmed}, alreadyCached={_alreadyCached}, failed={FailedPaths.Count}.");
-            if (FailedPaths.Count > 0)
-            {
-                // Requirement 5: failures after suppression are reported as FAILED warm-up;
-                // the lazy first-consumer path is preserved. Cache counts are never cited
-                // as evidence of success - the per-path outcomes above are the evidence.
-                Log.Warn(
-                    $"FAILED warm-up for {FailedPaths.Count} path(s): {string.Join(", ", FailedPaths)}. Those effects were NOT " +
-                    "pre-warmed; RegentFX's lazy first-consumer path (VFXUtil.GenVFXNode -> PreloadManager.Cache.GetScene) serves " +
-                    "them at first use.");
-            }
-            QueueFree();
+            ObserveActiveRequest();
             return;
         }
 
-        // RFX-2 owns the loading strategy; this intentionally keeps the existing one
-        // synchronous ResourceLoader.Load per frame. One item per frame bounds item count,
-        // not the duration of a heavy item - that is RFX-2's concern, not changed here.
+        // Queue-drained is checked before the retire gate: if everything was already
+        // submitted, "drained" is the accurate terminal reason even when the loader was
+        // retired afterwards.
+        if (Pending.Count == 0)
+        {
+            CompleteWarmUp("the queue drained");
+            return;
+        }
+
+        // Terminal retire gate: once the loader is unusable, optional work is over. Checked
+        // here so a retire decision always reaches CompleteWarmUp exactly once, whatever
+        // triggered it.
+        if (_loaderRetired)
+        {
+            CompleteWarmUp(_retireReason ?? "no live NAssetLoader was reachable");
+            return;
+        }
+
+        // Owner check. The warmer is a child of the NGame it was attached to, so a live
+        // owner is normally guaranteed; this covers teardown races.
+        MegaCrit.Sts2.Core.Nodes.NGame? nGame = MegaCrit.Sts2.Core.Nodes.NGame.Instance;
+        if (nGame == null || !GodotObject.IsInstanceValid(nGame))
+        {
+            CompleteWarmUp("the owning NGame is gone");
+            return;
+        }
+
+        if (!_loaderResolved)
+        {
+            // Resolve on one frame, submit on the next: one action per frame, no burst.
+            TryResolveLoader(nGame);
+            return;
+        }
+
+        // Menu idle is the submission window. The prefix runs during NGame startup, long
+        // before LaunchMainMenu makes the menu the current scene, so "not yet seen" is a
+        // wait state and "seen, then gone" is the stop condition. Leaving the menu ends
+        // optional work; an already-submitted request is still observed to completion by
+        // the branch above.
+        if (nGame.MainMenu == null)
+        {
+            if (_menuSeen)
+            {
+                CompleteWarmUp("the main menu is no longer the current scene");
+                return;
+            }
+            if (++_menuWaitFrames > MenuWaitFrameLimit)
+            {
+                _loaderRetired = true;
+                _retireReason = $"the main menu never became the current scene within {MenuWaitFrameLimit} frames";
+                return;
+            }
+            return; // still booting; the menu has not appeared yet
+        }
+        if (!_menuSeen)
+        {
+            _menuSeen = true;
+            Log.Info($"MENU IDLE: the main menu is the current scene; optional warm-up starts. queue={Pending.Count}");
+        }
+
+        SubmitNextOptionalRequest();
+    }
+
+    /// <summary>
+    /// Finds and validates the LIVE NAssetLoader node. Never uses NAssetLoader.Instance:
+    /// that getter returns a fabricated, unattached node before _Ready has assigned the
+    /// backing field, which is the exact lifecycle bug this work exists to avoid. The node
+    /// is located by type anywhere under the running NGame, so no scene-authored node name
+    /// is assumed.
+    /// </summary>
+    private bool TryResolveLoader(MegaCrit.Sts2.Core.Nodes.NGame nGame)
+    {
+        if (++_loaderWaitFrames > LoaderResolveFrameLimit)
+        {
+            _loaderRetired = true;
+            _retireReason = $"no live NAssetLoader node under the running NGame after {LoaderResolveFrameLimit} frames";
+            return false;
+        }
+        NAssetLoader? loader = FindLiveAssetLoader(nGame);
+        if (loader == null)
+            return false;
+        // Readiness, not mere presence: _Ready must have run and the node must be in the
+        // tree, so the engine's own _Process will actually drain what we enqueue.
+        if (!loader.IsInsideTree() || !loader.IsNodeReady())
+            return false;
+
+        _liveLoader = loader;
+        _loaderResolved = true;
+        Log.Info(
+            $"LOADER: live NAssetLoader resolved at '{loader.GetPath()}' (in tree, ready). Optional warm-up may now be " +
+            "submitted one path at a time while the main menu is idle.");
+        return true;
+    }
+
+    private static NAssetLoader? FindLiveAssetLoader(Node parent)
+    {
+        // Bounded traversal. The loader is normally a direct child of the scene root, so it
+        // is found within the first few visits; the budget only matters in the pathological
+        // case where the node is absent, where an unbounded walk would cost the whole
+        // NGame tree on every frame until the resolve times out. GetChildCount/GetChild are
+        // used instead of GetChildren() because the latter allocates a native array per call.
+        int budget = LoaderSearchNodeBudget;
+        return SearchForLoader(parent, ref budget);
+    }
+
+    private static NAssetLoader? SearchForLoader(Node node, ref int budget)
+    {
+        if (budget <= 0)
+            return null;
+        int count = node.GetChildCount();
+        // Direct children first: the engine authors the loader as a direct child of the NGame
+        // scene root, so this pass normally finds it without descending into any sibling
+        // subtree. A depth-first walk could otherwise burn the whole budget inside a large
+        // sibling (the scene container) before ever reaching it.
+        for (int i = 0; i < count; i++)
+        {
+            if (--budget <= 0)
+                return null;
+            if (node.GetChild(i) is NAssetLoader direct)
+                return direct;
+        }
+        for (int i = 0; i < count; i++)
+        {
+            if (--budget <= 0)
+                return null;
+            NAssetLoader? nested = SearchForLoader(node.GetChild(i), ref budget);
+            if (nested != null)
+                return nested;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Submits exactly one single-path session to the engine's own loader. The engine
+    /// serializes sessions and already loads /vfx/ scenes one at a time with
+    /// useSubThreads=false, so the serial VFX rule is preserved by construction: this mod
+    /// never issues a threaded request of its own. Paths without a /vfx/ segment (for
+    /// example Stardust.tscn) ride the same single-path session.
+    /// </summary>
+    private void SubmitNextOptionalRequest()
+    {
+        if (_liveLoader is not NAssetLoader loader || !GodotObject.IsInstanceValid(loader))
+        {
+            _loaderRetired = true;
+            _retireReason = "the live NAssetLoader was freed";
+            CompleteWarmUp(_retireReason);
+            return;
+        }
+
         string path = Pending[0];
         Pending.RemoveAt(0);
         try
         {
-            PackedScene? scene = ResourceLoader.Load<PackedScene>(path, null, ResourceLoader.CacheMode.Reuse);
-            if (scene == null)
-            {
-                FailedPaths.Add(path);
-                Log.Warn($"Warm-up load returned null: {path}");
-                return;
-            }
-            bool added = false;
-            if (_modSceneCache != null && _cacheTryAdd != null)
-                added = _cacheTryAdd.Invoke(_modSceneCache, new object?[] { path, scene }) is true;
-            if (added)
-                _warmed++;
-            else
-                _alreadyCached++; // a lazy consumer populated this path before we did
+            // Bounded scratch cache: this dictionary holds exactly the one in-flight path.
+            var scratch = new ConcurrentDictionary<string, Resource>();
+            // The engine AssetCache parameter is deliberately left null. Passing the shared
+            // PreloadManager.Cache would let an OPTIONAL request permanently mark a path as
+            // failed engine-wide, which would make RegentFX's lazy first-consumer path throw
+            // instead of attempting its normal load. Local failure recording keeps that path
+            // byte-for-byte as it behaved before this mod existed.
+            var session = new AssetLoadingSession(
+                $"{SessionNamePrefix} {path}",
+                new[] { path },
+                scratch,
+                null);
+            Task<bool> task = loader.LoadInTheBackground(session);
+            _activePath = path;
+            _activeTask = task;
+            _scratchCache = scratch;
+            _requestActive = true;
+            Log.Info($"REQUEST: one optional path handed to the live NAssetLoader; {Pending.Count} path(s) still queued behind it. path={path}");
         }
         catch (Exception e)
         {
             FailedPaths.Add(path);
-            Log.Warn($"Warm-up load failed for {path}: {e.Message}");
+            Log.Warn($"Optional warm-up request could not be submitted for {path}: {e.Message}");
         }
+    }
+
+    /// <summary>
+    /// Polls the one outstanding request. No task continuation is registered: a callback
+    /// could outlive this node or a torn-down NGame, while polling from _Process cannot.
+    /// </summary>
+    private void ObserveActiveRequest()
+    {
+        Task<bool>? task = _activeTask;
+        string? path = _activePath;
+        if (task == null || path == null)
+        {
+            ClearActiveRequest(); // defensive: never stay stuck on a half-recorded request
+            return;
+        }
+
+        // Godot exposes no cancellation for an accepted request, so it is observed to
+        // completion even after the menu is left or the owner starts tearing down.
+        if (!task.IsCompleted)
+            return;
+
+        if (task.IsFaulted || task.IsCanceled)
+        {
+            FailedPaths.Add(path);
+            Log.Warn($"Optional warm-up request ended {task.Status} for {path}: {task.Exception?.GetBaseException().Message}");
+            ClearActiveRequest();
+            return;
+        }
+
+        // Task completion is NOT load success: the engine session completes even when the
+        // individual path failed, so the scratch cache and the resource itself decide.
+        Resource? resource = null;
+        ConcurrentDictionary<string, Resource>? scratch = _scratchCache as ConcurrentDictionary<string, Resource>;
+        if (scratch != null)
+            scratch.TryGetValue(path, out resource);
+
+        if (resource is PackedScene scene && GodotObject.IsInstanceValid(scene) && scene.CanInstantiate())
+        {
+            bool added = false;
+            if (_modSceneCache != null && _cacheTryAdd != null)
+                added = _cacheTryAdd.Invoke(_modSceneCache, new object?[] { path, scene }) is true;
+            if (added)
+            {
+                _warmed++;
+                Log.Info($"WARMED: {path} loaded through the live NAssetLoader and published to RegentFX's ModSceneCache.");
+            }
+            else
+            {
+                _alreadyCached++; // a lazy consumer populated this path before we did
+            }
+        }
+        else
+        {
+            FailedPaths.Add(path);
+            Log.Warn(
+                $"Optional warm-up produced no usable PackedScene for {path} " +
+                $"(resource={(resource == null ? "absent" : resource.GetType().FullName)}, " +
+                $"canInstantiate={(resource is PackedScene candidate && GodotObject.IsInstanceValid(candidate) ? candidate.CanInstantiate().ToString() : "n/a")}). " +
+                "RegentFX's lazy first-consumer path serves it at first use.");
+        }
+
+        // Drops the scratch Resource reference after publication. The published PackedScene
+        // stays alive through RegentFX's ModSceneCache; nothing else is retained.
+        ClearActiveRequest();
+    }
+
+    private void ClearActiveRequest()
+    {
+        _requestActive = false;
+        _activeTask = null;
+        _activePath = null;
+        _scratchCache = null;
+    }
+
+    /// <summary>
+    /// Ends optional work. Reports per-path outcomes, and reports an early stop as a stop -
+    /// never as a boot saving, because the paths that were never submitted still fall back
+    /// to RegentFX's lazy first-consumer path exactly as they did before this mod existed.
+    /// </summary>
+    private void CompleteWarmUp(string reason)
+    {
+        _phase = BindPhase.Completed;
+        Log.Info(
+            $"COMPLETED ({reason}): warmed={_warmed}, alreadyCached={_alreadyCached}, failed={FailedPaths.Count}, " +
+            $"notSubmitted={Pending.Count}.");
+        if (Pending.Count > 0)
+        {
+            Log.Warn(
+                $"STOPPED with {Pending.Count} path(s) never submitted ({reason}). This is NOT a boot saving: those effects " +
+                "fall back to RegentFX's lazy first-consumer path (VFXUtil.GenVFXNode -> PreloadManager.Cache.GetScene).");
+        }
+        if (FailedPaths.Count > 0)
+        {
+            // Requirement 5: failures after suppression are reported as FAILED warm-up;
+            // the lazy first-consumer path is preserved. Cache counts are never cited
+            // as evidence of success - the per-path outcomes above are the evidence.
+            Log.Warn(
+                $"FAILED warm-up for {FailedPaths.Count} path(s): {string.Join(", ", FailedPaths)}. Those effects were NOT " +
+                "pre-warmed; RegentFX's lazy first-consumer path (VFXUtil.GenVFXNode -> PreloadManager.Cache.GetScene) serves " +
+                "them at first use.");
+        }
+        QueueFree();
     }
 
     // ----------------------------- helpers -----------------------------
