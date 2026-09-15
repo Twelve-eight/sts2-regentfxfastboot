@@ -416,3 +416,33 @@ idx 50  RegentFXFastBoot   source=steam_workshop  enabled=True   <- 唯一真实
 另:`mods/RegentFXFastBoot/` 当前仍为空(未被重建).
 任何不带 `-p:CopyToModsFolderOnBuild=false` 的构建都会重建该目录,恢复尾部同 id 行 -> 强制晚序,
 并使 `verify-fastboot-order.ps1` 的"恰好 1 行"断言失败.本会话所有构建均带该参数,已逐次核对.
+
+### 载荷同一性:哈希级证据 + 一个非显然陷阱(2026-09-16 03:3x)
+
+**采纳的纠正**:此前用 IL 比对两个**不同发布版本**(0.2.0 34304B vs 当前 53248B)来推断"载荷是否等于源码",
+方向错了 - 两者本就不同版本,巨大差异是预期的,不构成漂移证据.同一性判断应当用哈希/字符串比对.
+
+**同一性证据(一次比对即定论)**:
+对当前源码重建后与暂存载荷做 UTF-16 用户字符串集合比对:
+```
+rebuilt: 223 strings  ccd4ee929983f78d
+staged : 223 strings  cb5cb518e093752c
+仅重建有: 1.0.0+02187aa1f9df9279855502c497d77ab4a9aaacd9
+仅暂存有: 1.0.0+b2bc63f6a6100fda30d9464a30ce8adacf33f13a
+```
+两侧各 223 条字符串,**唯一差异是嵌入的 git sha** -> 代码逐字符一致,差异纯属 provenance.
+
+**陷阱(非显然,已写入 DEVELOP.md)**:SDK 自动嵌入 `<Version>1.0.0+<git sha></Version>`,
+因此**同一份源码在不同 HEAD 上构建会产出不同 DLL 字节**.后果:
+- 载荷哈希与重建哈希不等时,不要立即判定"载荷过期";先比字符串集合.
+- 暂存载荷原先内嵌 `b2bc63f`,而弹窗代码提交是 `bee20d5`(其子提交),provenance 指向**不含弹窗的提交**,具误导性.
+- **处置**:在最后一次提交之后重建并重新暂存.现载荷内嵌 `02187aa`(含全部弹窗代码的 HEAD).
+  新哈希:DLL `ccd4ee929983f78d`,PDB `b51bbf6d2a111d09`,json 不变 `39ef4122bb5685dc`.
+
+**已核实的既有记录**:
+- `.tmp/rfx2-supervision/artifacts/rel-run1.txt` 确认 `c0e149878b228f28` 是 RFX-2 实测构建(34304B,0.2.0).
+- `docs/performance-evidence/2026-09-15/GATE-1-PAYLOAD-VERIFICATION.md` 明确记录"嵌入 sha != HEAD"是
+  脏树/提交前移导致的**假阳性**,诚实做法是"重建后比对".
+
+**上传状态**:再次重试(03:2x)仍为 `Waiting for confirmation` -> `Timed out waiting for confirmation` -> `ERROR (Timeout)`,
+与上次同形态.steamcmd 缓存令牌失效,需人工完成设备确认.

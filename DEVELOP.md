@@ -78,3 +78,18 @@ RFX **必须早于** RegentFX 加载,否则 `LoadScenes` 前缀装上时初始�
 - 载荷:`workshop/content/RegentFXFastBoot/` 下 `RegentFXFastBoot.{dll,json,pdb}`,
   json 为 `mod/RegentFXFastBoot.json` 的**逐字节 CRLF 副本**.
 - 上传:`workshop/workshop_upload.vdf`(publishedfileid `3799305611`).
+
+### DLL 哈希会随 HEAD 漂移(不是源码漂移)
+
+SDK 会自动嵌入 `<Version>1.0.0+<git sha></Version>`,所以**同一份源码在不同 HEAD 上构建会得到不同的 DLL 字节**.
+后果与处置:
+
+- 载荷哈希 ≠ 重建哈希时,**先比对字符串集合再下结论**:两侧 UTF-16 用户字符串应完全一致,
+  唯一差异应为那条 `1.0.0+<sha>`(实测:223 vs 223 条,仅版本串不同).
+- `refresh-workshop-payloads.ps1` 与 `GATE-1-PAYLOAD-VERIFICATION.md` 里的"嵌入 sha != HEAD"
+  属于**已记录的假阳性**;该文档同时说明"重建后比对"才是诚实做法.
+- 提交后再构建会让内嵌 sha 指向**旧提交**(可能是不含本次改动的提交),provenance 具有误导性.
+  因此:**最后一次构建应在最后一次提交之后做**,然后重新暂存载荷.
+- IL 级比对(`tools/il-evidence/`)与字符串集合比对都与引用解析无关,是判断"载荷是否就是当前源码"的可靠手段;
+  反编译的 C# 文本不是(渲染差异会产生幻影结构差异).
+
