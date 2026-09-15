@@ -293,3 +293,63 @@ LOM 即是可执行的订阅者路径.
 
 - "RFX 可用"由 02:28 会话日志直接证明;"当前仍晚序"由当前 `godot.log` 的 `LATE-ORDER:` 与 LOM 快照直接证明.
 - 本节所有结论来自实机日志与反编译/反射目标核对,未新增任何推断性机制.
+
+---
+
+## 2026-09-16 (03:0x) RFX-3: 晚序提示弹窗(用户新需求)
+
+### 需求(用户 2026-09-16 指示)
+
+加速失败时(顺序错误),进入主菜单后弹窗告知用户如何使加速生效,并提供两个选择.
+用户对三个决策点的答复:
+- 永久关闭 = **只关闭提示**,mod 保持待命(之后若顺序修好仍会自动生效);
+- 使生效 = **指引用户手动改写加载顺序**(用已发布的 LOM 工坊 mod),RFX **不写** settings.save;
+- 频率 = **仅提示一次**,之后不再提示.
+
+### 实现(新增 3 个文件 + MainFile 一处接入)
+
+| 文件 | 职责 |
+|---|---|
+| `LateOrderNotice.cs` | 弹窗本体.宿主是引擎自己的 `NModalContainer.Instance.Add(this)`,节点实现 `IScreenContext`(仅一个成员 `DefaultFocusedControl`).内容自绘:全屏 Control -> 半透明 ColorRect 遮罩 -> 居中 PanelContainer -> Margin -> VBox -> 标题/正文/步骤/两个按钮. |
+| `LateOrderNoticeWatcher.cs` | 主菜单观察节点,挂在 `SceneTree.Root`(延迟 add_child).有界:菜单等待 3600 帧,菜单出现后静置 30 帧,模态槽位重试 120 次 x 30 帧间隔.每条路径都 QueueFree. |
+| `NoticeState.cs` | 一次性状态 `OS.GetUserDataDir()/RegentFXFastBoot/notice.json`.读写全包 try/catch,失败最坏只是多弹一次. |
+
+接入点:`MainFile.Initialize` 的**确定性晚序分支**(`ModSceneCache.Count > 0`)末尾调用 `LateOrderNoticeWatcher.Schedule()`.早序/未知序**不调度** - 它们本轮仍可能成功,弹窗会是错的.
+
+### 为什么不用引擎的 vertical_popup 场景
+
+`NVerticalPopup` 的 `_scenePath` 是 `res://scenes/ui/vertical_popup.tscn`,**不在** `AssetSets` 的启动预载集里
+(该集合含 `NModdingScreen.AssetPaths` 但不含 `NVerticalPopup.AssetPaths`).走那条路会在主菜单触发一次资源加载;
+自绘骨架与 LOM 在本引擎版本实测可用的做法一致,零资源加载风险.
+
+### 自查中修掉的两个真实缺陷
+
+1. **把"没显示"记成已显示**:`NModalContainer.Add` 在槽位被占时只记一条警告并**直接丢弃节点**(返回 void).
+   原先 `TryShow` 无条件返回 true -> 会把没显示记成已显示,并泄漏一个未挂父节点的节点.
+   现在先查 `container.OpenModal != null` 主动退避,Add 后再用 `ReferenceEquals(container.OpenModal, notice)` 回读确认.
+2. **`Clear()` 可能误杀引擎模态**:`NModalContainer.Clear()` 释放**所有**非 backstop 子节点.
+   现在只在 `ReferenceEquals(container.OpenModal, this)`(即确定槽位仍属于自己)时才调 Clear,否则只 QueueFree 自己.
+
+另修正一处非必要侵入:不再 `GrabFocus` 抢焦点 - 引擎通过 `ActiveScreenContext.FocusOnDefaultControl()` -> `Control.TryGrabFocus()`
+只在手柄方向导航时才抓焦点(NodeUtil.cs:107),鼠标玩家不该被抢.
+
+### 主菜单同时段的其他模态(时序已核实)
+
+`NMainMenu._Ready` 自身也会用同一个单槽位:
+- `NConfirmModLoadingPopup`:仅当 `SettingsSave.ModSettings == null` 且已有 mod(本机与老订阅者满足,新订阅者不满足);
+- `NEarlyAccessDisclaimer`:仅当 `IsReleaseGame()` 且 `!SeenEaDisclaimer`.
+两者都在 `_Ready` 中同步 Add,即**在我们静置 30 帧之前**;因此我们的弹窗要么排在它们之后(槽位空出后由重试窗口接管),
+要么在它们都不出现时直接拿到槽位.不会顶掉引擎自己的弹窗.
+
+### 验证状态(诚实声明)
+
+- 构建:0 错误(仅 3 条预存在的 Publicizer/STS002 告警).
+- 载荷静态核验:DLL 元数据含 `LateOrderNotice`/`LateOrderNoticeWatcher`/`NoticeState`/`IScreenContext`/`NModalContainer`;
+  全部 NOTICE 日志串在场;中文串以 UTF-16LE 正确落盘(14004 字节命中 Han 区间);
+  **无** `SettingsSave`/`ModList`/`SaveSettings`/`SettingsSaveMod` 引用(契约 5.1 未破坏);无 BaseLib/RitsuLib 引用.
+- **未做实机验证**:弹窗的真实外观/点击/关闭需要启动游戏,尚未授权运行.这是本项唯一未验证环节,已明确标注.
+
+### 顺带完成
+
+- `DEVELOP.md`:新建,记录 RFX 的行为契约(顺序前提,引擎事实表,交付路径,不变式,构建发布).
+  此前该仓库只有 DEVLOG.md 与 astra-advice.md,没有设计/契约文档.

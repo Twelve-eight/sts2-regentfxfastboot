@@ -21,6 +21,12 @@ namespace RegentFXFastBoot.RegentFXFastBootCode;
 /// must initialize BEFORE the RegentFX assembly is loaded. It is NOT load-order
 /// independent, it never reorders user mods, and it never writes user configuration.
 ///
+/// If this launch is DEFINITIVELY late order, the failure is reported to the player as well
+/// as to the log (RFX-3, 2026-09-16): a one-shot modal on the main menu explains why nothing
+/// was accelerated and offers (a) the instructions for making it take effect, and (b) "do
+/// not show again". The notice writes no settings and reorders nothing; it records its own
+/// one-shot state in its own file. See LateOrderNotice / LateOrderNoticeWatcher.
+///
 /// The order has to be set OUTSIDE this mod, and the ENGINE ALONE CANNOT EXPRESS IT. The
 /// modding screen has no reorder control: NModdingScreen/NModMenuRow only ever write
 /// IsEnabled, and ModSettings.ModList is written in exactly two places, both inside
@@ -126,6 +132,15 @@ namespace RegentFXFastBoot.RegentFXFastBootCode;
 ///    own _Process draining the queue; cleanup = QueueFree on Completed, or freed with
 ///    NGame at teardown. Exactly one node is ever created per launch (only on the
 ///    Queued transition with a non-empty queue).
+///  - Late-order notice watcher (RFX-3, LateOrderNoticeWatcher, named
+///    RegentFXFastBoot_NoticeWatcher): producer = Initialize's definitive-late branch only;
+///    owner = this mod, attached to the SceneTree root (deferred) so no NGame lifecycle can
+///    drop it early; first consumer = its own _Process; cleanup = QueueFree on every
+///    terminal path (notice shown, frame budget exhausted, modal slot never freed). At most
+///    one is ever created per launch, and it is never created for Early or Unknown order.
+///    The notice node it adds lives inside the engine's NModalContainer (which owns its
+///    lifetime) and closes through NModalContainer.Clear(), exactly like the engine's own
+///    mod-loading confirmation.
 ///  - Optional warm-up request (RFX-2): producer = the warmer's own _Process while the main
 ///    menu is idle; owner = this mod, running on the live NGame; first consumer =
 ///    NAssetLoader._Process in the engine main loop; cleanup = the per-request scratch cache
@@ -260,7 +275,15 @@ public partial class MainFile : Node
                         "This launch cannot be intercepted: the synchronous " +
                         "preload (if one ran) already happened and cannot be undone. No suppression and no warm-up will be scheduled; " +
                         $"native RegentFX behavior is untouched. Observations (not proof of success): ModSceneCache.Count={cachedCount}, " +
-                        $"RegentFX PreloadEffects setting reads {(preloadSetting.HasValue ? preloadSetting.Value.ToString() : "unknown")}.");
+                        $"RegentFX PreloadEffects setting reads {(preloadSetting.HasValue ? preloadSetting.Value.ToString() : "unknown")}. " +
+                        "A one-shot popup will explain this on the main menu (see NOTICE: lines).");
+
+                    // RFX-3: the failure is otherwise silent to the player. Schedule the
+                    // one-shot notice on the main menu. Only this definitive-late branch
+                    // schedules it: Early and Unknown may still succeed this launch, and a
+                    // popup would then be wrong. Scheduling is best-effort and cannot fail
+                    // the launch (it logs and returns).
+                    LateOrderNoticeWatcher.Schedule();
                     return;
                 }
 
