@@ -82,6 +82,16 @@ internal sealed partial class ModNotice : Control, IScreenContext
     /// returns void and, when a modal is already open, logs a warning and drops the node
     /// WITHOUT adding it to the tree (NModalContainer.cs Add()). Treating that call as
     /// success would both record a popup the player never saw and leak an unparented node.
+    ///
+    /// The slot is judged by LIVENESS, not by null: several engine modals free themselves with
+    /// QueueFreeSafely() and never call Clear() (NGenericPopup.OnYesButtonPressed/OnNoButtonPressed,
+    /// NConfirmModLoadingPopup.OnYesButtonPressed/OnNoButtonPressed), and NModalContainer has no
+    /// child-exit handler that would reset OpenModal. So a closed engine modal leaves OpenModal
+    /// pointing at a freed object until the next Add(). Testing OpenModal != null alone would
+    /// then refuse to show this notice forever - and that state is reachable on the one launch
+    /// that matters most: NConfirmModLoadingPopup is shown when
+    /// `SettingsSave.ModSettings == null && ModManager.Mods.Count > 0` (NMainMenu.cs:484-486),
+    /// which is exactly a first-time subscriber, and answering it frees the popup without Clear().
     /// </summary>
     internal static bool TryShow(NoticeKind kind, int warmed = 0)
     {
@@ -93,7 +103,7 @@ internal sealed partial class ModNotice : Control, IScreenContext
                 MainFile.Log.Info($"{PrefixFor(kind)}: the engine modal container is not available yet; the notice was not shown");
                 return false;
             }
-            if (container.OpenModal != null)
+            if (SlotBusy(container, kind))
             {
                 // Something else owns the single slot (the engine's own mod-loading
                 // confirmation or the early-access disclaimer are the usual holders on the
@@ -230,6 +240,50 @@ internal sealed partial class ModNotice : Control, IScreenContext
         // ActiveScreenContext.FocusOnDefaultControl() -> Control.TryGrabFocus(), which only
         // acts when the player is using directional (controller) navigation (NodeUtil.cs:107).
         // Grabbing it unconditionally would steal focus from a mouse player for no reason.
+    }
+
+    /// <summary>
+    /// True when the container's single modal slot is occupied by something still alive.
+    ///
+    /// Deliberately conservative in ONE direction only: a dangling OpenModal (holder freed, no
+    /// Clear() call) is treated as FREE, because that state is a permanent block otherwise and
+    /// the engine itself overwrites OpenModal on the next Add() regardless. A live holder is
+    /// never disturbed - this method only reads.
+    ///
+    /// The freed-holder case is not hypothetical: NConfirmModLoadingPopup and NGenericPopup both
+    /// end with QueueFreeSafely() and no Clear(), and NModalContainer has no child-exit handler.
+    /// Answering the mod-loading confirmation with "no" leaves exactly that state for the rest of
+    /// the session, and that popup is shown precisely when `SettingsSave.ModSettings == null`
+    /// (NMainMenu.cs:484-486) - i.e. to a first-time subscriber.
+    ///
+    /// Not recursive: the release is attempted at most once, so a Clear() that fails cannot loop.
+    /// </summary>
+    private static bool SlotBusy(NModalContainer container, NoticeKind kind)
+    {
+        IScreenContext? holder = container.OpenModal;
+        if (holder == null)
+            return false;
+        if (holder is GodotObject godotHolder && GodotObject.IsInstanceValid(godotHolder))
+            return true;
+
+        // The recorded holder is no longer a valid object: the engine closed it without
+        // clearing the slot. Release the slot rather than staying blocked forever. Clear() also
+        // frees any other non-backstop child, which is safe here: the engine adds modals only
+        // through Add() (so the freed holder is the only candidate), and a child that Godot
+        // already freed is no longer in the tree.
+        MainFile.Log.Info(
+            $"{PrefixFor(kind)}: the engine modal slot held a freed modal; releasing the slot so the notice can be shown");
+        try
+        {
+            container.Clear();
+        }
+        catch (Exception e)
+        {
+            MainFile.Log.Warn($"{PrefixFor(kind)}: could not release the stale modal slot ({e.GetType().Name}: {e.Message})");
+        }
+        // One check after one attempt: whatever OpenModal says now decides, and a still-live
+        // holder (or one that reappeared) simply means "busy" to the caller's retry loop.
+        return container.OpenModal != null;
     }
 
     /// <summary>
