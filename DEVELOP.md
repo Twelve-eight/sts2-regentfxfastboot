@@ -52,15 +52,40 @@ RFX **必须早于** RegentFX 加载,否则 `LoadScenes` 前缀装上时初始�
 
 | 按钮 | 行为 |
 |---|---|
-| 使生效(指引) | 显示具体操作步骤(装 Load Order Manager -> 打开"加载顺序" -> 把 RegentFXFastBoot 移到 RegentFX 上面 -> 应用 -> 重启).**不写任何文件**. |
-| 不再提示 | 写入一次性状态文件,之后**永不再弹**.加速功能**保持待命**:若用户以后自己把顺序修好,加速仍会自动生效. |
+| 使生效(指引) | 显示具体操作步骤(装 Load Order Manager -> 打开"加载顺序" -> 把 RegentFXFastBoot 移到 RegentFX 上面 -> 应用 -> 重启),并打开 LOM 的工坊页.**不写任何文件,不改顺序**. |
+| 不再提示 | 关闭弹窗.一次性状态**在弹窗展示时就已经记录**(见"频率"),所以此按钮只是让用户主动关掉它,而不是记录点.加速功能**保持待命**:若用户以后自己把顺序修好,加速仍会自动生效. |
 
-**频率**:仅提示一次.写入状态后不再出现,即使用户没点按钮就关掉游戏 - 只在实际展示过之后才记.
+**频率**:仅提示一次.状态在**展示成功时**记录,因此用户不点任何按钮直接退出游戏,下次也不会再弹.
+只有"确实显示过"才会记录 - 没能显示(模态槽位被占/主菜单未出现)时不记录,下次仍会尝试.
 
 **状态文件**:`OS.GetUserDataDir()/RegentFXFastBoot/notice.json`
 (Windows 即 `%APPDATA%/SlayTheSpire2/RegentFXFastBoot/notice.json`).
 只存一个布尔语义(`noticeShown`).读写全部包在 try/catch 内:**任何失败都不得影响游戏**,
 最坏情况只是多弹一次.
+
+### 验收顺序(不可颠倒)
+
+弹窗**只在确定性晚序**被调度(`LateOrderNoticeWatcher.Schedule()` 仅出现在
+`ModSceneCache.Count > 0` 分支),所以观察它必须发生在修好顺序**之前**:
+
+1. 推出 0.3.0(或覆盖工坊内容目录),使实机加载的是含弹窗的 DLL.
+2. **在顺序仍然错误的状态下启动游戏**(此时 `settings.save` 为 RFX@50 vs RegentFX@27,仍晚序):
+   进主菜单后应出现一次弹窗,然后退出.预期日志:
+   `NOTICE: late-order popup scheduled` -> `NOTICE: late-order popup shown on the main menu` ->
+   `NOTICE: one-shot state recorded at ..`;预期文件:
+   `%APPDATA%/SlayTheSpire2/RegentFXFastBoot/notice.json`(内容 `{"noticeShown": true}`).
+   这一次启动同时会清掉 `settings.save` 里的陈旧行(见下),不要为此重复启动.
+3. 之后才用 LOM 打开"加载顺序",把唯一那条 `RegentFXFastBoot` 移到 `RegentFX` 上方,点"应用".
+4. 重启验证加速生效:`tools/verify-fastboot-order.ps1` 应 exit 0(无 `LATE-ORDER`,出现
+   `ARMED`/`BOUND`/`INTERCEPTED`/`WARMED`),且此时**不应**再出现弹窗(日志应显示
+   `already shown in an earlier launch`).
+
+顺序若已先修好,弹窗只能靠临时把 RFX 移回 RegentFX 下方再启动一次来复测.
+早序运行永远不会调度弹窗 - 这是设计使然(早序本轮可能成功,弹窗会是错的),不是缺陷.
+
+**本机当前仍有两行 RFX**:`settings.save` 的 `idx 40` 是已删除本地副本的陈旧行
+(`mods_directory`),`idx 50` 是工坊行.`ModManager.Initialize` 每轮按 `_mods`(实际在场 mod)
+重建 `mod_list`,所以上面第 2 步那次启动会一并清除 idx 40,此后 LOM 只显示唯一一行.
 
 ## 5. 不变式(不得破坏)
 

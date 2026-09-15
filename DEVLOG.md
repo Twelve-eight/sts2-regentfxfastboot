@@ -446,3 +446,28 @@ staged : 223 strings  cb5cb518e093752c
 
 **上传状态**:再次重试(03:2x)仍为 `Waiting for confirmation` -> `Timed out waiting for confirmation` -> `ERROR (Timeout)`,
 与上次同形态.steamcmd 缓存令牌失效,需人工完成设备确认.
+
+### 确定性证明 + IL 级同一性 + 验收顺序修正(2026-09-16 03:4x)
+
+**确定性**:同一 HEAD(`4afe28b`)连续两次 Rebuild -> 字节完全相同(`f90d8dbfa9c57456`).
+构建确定性成立,此前观察到的哈希差异与确定性无关.
+
+**同一性(IL 级,比建议要求的更强)**:暂存载荷与当前 HEAD 构建的 `ilspycmd -il` 输出
+**逐字符完全相同**(各 372099 字符,unified diff 0 行).IL 输出不含 COFF 时间戳/调试 GUID/版本属性 blob,
+所以连"唯一差异是 InformationalVersion"这一步都不需要 - 代码层面零差异.
+此前观察到的 DLL 哈希差异(`ccd4ee929983f78d` -> `f90d8dbfa9c57456`)纯粹来自 HEAD 前移
+(内嵌 `1.0.0+<sha>` 变化),与源码无关.
+
+**已重新暂存**:载荷现内嵌 `4afe28bb85b92ddbfede26773e54cc2a7c604ddd`(= 当前 HEAD).
+新哈希:DLL `f90d8dbfa9c57456`,PDB `031b0b704dd5d40a`,json 不变 `39ef4122bb5685dc`.
+
+**验收顺序修正(此前的记录有缺陷)**:先前的 DEVLOG 只写了"启动清陈旧行 -> LOM 调序 -> 重启验证成功链",
+**漏掉了"弹窗必须在调序之前观察"**.照旧记录执行会永久错过弹窗,因为
+`LateOrderNoticeWatcher.Schedule()` 只在确定性晚序分支被调用,顺序一旦修好,早序运行永不调度弹窗.
+已在 `DEVELOP.md` 第 4 节写入不可颠倒的四步验收顺序,并注明:顺序若已先修好,
+只能靠临时把 RFX 移回 RegentFX 下方再启动一次来复测.
+
+### 仍未完成:上传(Steam Guard)
+
+第三次重试(03:2x)形态不变:`Waiting for confirmation` -> `Timed out waiting for confirmation` -> `ERROR (Timeout)`.
+需要人工完成设备确认.上传未落地前,实机启动加载的仍是 0.2.0(无弹窗),实机验证无法开始.
