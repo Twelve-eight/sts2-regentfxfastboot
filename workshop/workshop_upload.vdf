@@ -17,7 +17,7 @@
 
 本 mod 只在满足前置顺序时生效:
 [list]
-[*][b]硬性顺序要求[/b]:必须在游戏内模组列表把 RegentFXFastBoot 放在 RegentFX [b]上面[/b](加载器尊重用户的手动排序)。顺序不满足时,日志会如实报告 LATE-ORDER:本次启动不跳过任何内容、不做预热,启动卡顿(如发生)已经发生且无法撤回。
+[*][b]硬性顺序要求[/b]:RegentFXFastBoot 必须排在 RegentFX [b]上面[/b].顺序的载体是 settings.save 里的 mod_list,而游戏界面对它只能勾选启用/禁用,不能改顺序,因此必须用调序工具(见下方"使用方法").顺序不满足时,日志会如实报告 LATE-ORDER:本次启动不跳过任何内容,不做预热,启动卡顿(如发生)已经发生且无法撤回.
 [*]顺序正确时:在 RegentFX 的程序集加载瞬间挂上方法绑定,等它的初始化器真正调用同步预加载入口时才拦截(此时 PCK 挂载、脚本注册、RegentFX 配置默认值都已完成)
 [*]仅当 RegentFX 自己的 PreloadEffects 开关为开启时才会发生拦截;该开关关闭时本 mod 不做任何预热,保持原生关闭预加载的策略
 [*]拦截后把相同的场景清单交给引擎自己的异步加载面(NAssetLoader/AssetLoadingSession)预热进 RegentFX 自己的缓存:同一时刻最多一个可选请求,只在主菜单空闲时提交,不抢占引擎必需资源的加载带宽;离开主菜单后不再提交新请求,已在途的请求观察到完成
@@ -35,7 +35,8 @@
 
 [list]
 [*]订阅本 mod 与 [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3747497501]RegentFX[/url]
-[*]在游戏内模组列表把 RegentFXFastBoot 移到 RegentFX 上面(关键步骤,不可省略)
+[*][b]关键步骤:设置加载顺序.[/b]游戏本体的模组界面[b]没有[/b]调整顺序的功能(只有启用/禁用勾选),所以顺序必须由调序工具写入.推荐 [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3747605109]Load Order Manager[/url]:装好后在模组界面点"加载顺序",把 RegentFXFastBoot 移到 RegentFX [b]上面[/b],点"应用",重启游戏生效.
+[*][b]另请确认本 mod 只装了一份.[/b]本地副本与工坊副本同时存在时,引擎会在列表尾部写回第二行同名记录;排序只按 id 取[b]最后一行[/b]的位置,那一行会覆盖启用行的位置,导致每次启动都晚序.
 [*]未安装 RegentFX 时本 mod 保持待命,不做任何事
 [/list]
 
@@ -47,6 +48,6 @@
 [*][b]配合[/b]:[url=https://steamcommunity.com/sharedfiles/filedetails/?id=3747497501]RegentFX[/url](未安装则本 mod 无事可做)
 [*]v0.2.0 起不再依赖 BaseLib(经二进制核查,本 mod 的 DLL 对 BaseLib 的运行时引用为零)
 [/list]"
-	"changenote"		"v0.2.0: lifecycle repair with an explicit early-order requirement. No longer advertised as order independent: RegentFXFastBoot must load BEFORE RegentFX (place it above RegentFX in the mod list). Binding now happens only in the AssemblyLoad callback (method binding only, no asset collection there); warm-up is queued only when the LoadScenes interception actually fires, which also preserves RegentFX PreloadEffects=false; the warmer attaches to the already-constructed NGame instead of patching its constructor. Late order is reported truthfully as LATE-ORDER with no suppression and no warm-up, and warm-up failures are reported as FAILED with the native lazy-loading path preserved. Removed the BaseLib dependency after verifying the DLL emits zero BaseLib references. Manifest version bumped to 0.2.0. Also in this build: RFX-2 scheduling (2026-09-15) - the warm-up no longer loads synchronously one scene per frame. Optional work now goes through the engine's own coordination surface (NAssetLoader.LoadInTheBackground with a single-path AssetLoadingSession), one request outstanding at a time, submitted only while the main menu is idle and always observed to completion once accepted, because Godot exposes no cancellation. The live NAssetLoader is resolved from the running NGame's tree rather than the Instance getter, which fabricates an unattached node before _Ready. The session is given a NULL asset cache on purpose: passing the shared one would let an optional failure mark an asset failed engine-wide and make RegentFX's lazy fallback throw. Task completion is not treated as load success - the resource must be a valid PackedScene that can instantiate before it is published. Leaving the menu is reported as a stop, never as a boot saving."
+	"changenote"		"v0.2.1: install instruction correction. The 0.2.0 changenote told users to move RegentFXFastBoot above RegentFX in the game's mod list - that is impossible. The vanilla modding screen only toggles enabled/disabled and has no reorder control (verified against the decompiled engine: ModSettings.ModList is written only by ModManager.Initialize, and no move/reorder handler exists in NModdingScreen or NModMenuRow). The order must be set with a load-order editor; Load Order Manager (Workshop 3747605109) adds a Load Order button to the modding screen. Added the single-install rule: with a local copy and a workshop copy both present, the engine regenerates a second row carrying the same id at the tail of mod_list, and ModManager.SortModList keys priorities by id with last index winning, so that tail row overrides the enabled row and forces late order on every launch. The ARMED and LATE-ORDER log lines now carry the same instructions so the log alone says what to do. No behavioural change to the interception itself."
 	"publishedfileid"		"3799305611"
 }

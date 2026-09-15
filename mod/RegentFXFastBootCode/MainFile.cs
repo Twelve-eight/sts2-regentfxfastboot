@@ -17,13 +17,33 @@ namespace RegentFXFastBoot.RegentFXFastBootCode;
 /// <summary>
 /// RegentFX boot-stall mitigation (the measured stall was 4.1s on this machine, 2026-09-11).
 ///
-/// EXPLICIT ORDER REQUIREMENT (RFX-1, 2026-09-15): this mod must initialize BEFORE the
-/// RegentFX assembly is loaded. It is NOT load-order independent, it never reorders user
-/// mods, and it never writes user configuration. The user must place RegentFXFastBoot
-/// ABOVE RegentFX in the in-game mod list; the loader honors that manual order
-/// (ModManager.SortModList, engine ModManager.cs:193). If RegentFX's initializer already
-/// ran this launch, that is LATE order: nothing is suppressed, nothing is warmed, and the
-/// log says so truthfully.
+/// EXPLICIT ORDER REQUIREMENT (RFX-1, 2026-09-15; delivery correct 2026-09-16): this mod
+/// must initialize BEFORE the RegentFX assembly is loaded. It is NOT load-order
+/// independent, it never reorders user mods, and it never writes user configuration.
+///
+/// The order has to be set OUTSIDE this mod, and the ENGINE ALONE CANNOT EXPRESS IT. The
+/// modding screen has no reorder control: NModdingScreen/NModMenuRow only ever write
+/// IsEnabled, and ModSettings.ModList is written in exactly two places, both inside
+/// ModManager.Initialize (engine-dllsrc ModManager.cs:146 and :150). A manifest cannot
+/// express it either: `dependencies` means "load AFTER", so depending on RegentFX would
+/// make this mod later, not earlier. Declaring a dependency on a load-order editor is not a
+/// fix either: the Kahn pass forces this mod to be enqueued only after that editor is
+/// dequeued, so wherever that editor sits, this mod lands behind it.
+/// Verified in-game path: Load Order Manager (Steam Workshop 3747605109) injects a
+/// load-order button into NModdingScreen via a Harmony postfix on its _Ready, and writes
+/// ModList through SaveManager.SaveSettings(). It collects ModManager._mods WITHOUT the
+/// affects_gameplay filter, so this mod is listed even though affects_gameplay is false,
+/// and it is load-order independent itself (module initializer + PatchAll).
+///
+/// Where the order lives: ModSettings.ModList (mod_settings.mod_list in settings.save),
+/// keyed by the pair (id, source). SortModList builds its priority map by Id ONLY, last
+/// index winning (ModManager.cs:243/267), so ANY later row carrying this mod's id - for
+/// example a disabled duplicate install left at the tail - overrides the enabled row's
+/// position and forces late order on every launch. Keep exactly ONE RegentFXFastBoot
+/// install, then place that single row above RegentFX.
+///
+/// If RegentFX's initializer already ran this launch, that is LATE order: nothing is
+/// suppressed, nothing is warmed, and the log says so truthfully.
 ///
 /// Binding chain (engine facts, all verified against decompiled sources):
 ///  - ModManager.TryLoadMod loads a mod's DLL, then mounts its PCK, then calls its
@@ -233,8 +253,11 @@ public partial class MainFile : Node
                     _provenance = OrderProvenance.Late;
                     bool? preloadSetting = TryReadPreloadEffectsSetting(entryType.Assembly);
                     Log.Warn(
-                        "LATE-ORDER: RegentFX initialized before this mod. RegentFXFastBoot must sit ABOVE RegentFX in the game's mod list " +
-                        "(the loader honors that manual order, ModManager.SortModList). This launch cannot be intercepted: the synchronous " +
+                        "LATE-ORDER: RegentFX initialized before this mod. RegentFXFastBoot must sit ABOVE RegentFX in the load order. " +
+                        "The game's modding screen has no reorder control; set the order with a load-order editor (Load Order Manager, " +
+                        "Steam Workshop 3747605109) and restart. Also keep exactly ONE RegentFXFastBoot install: any later row with the " +
+                        "same id overrides its position, because ModManager.SortModList keys priorities by id with last index winning. " +
+                        "This launch cannot be intercepted: the synchronous " +
                         "preload (if one ran) already happened and cannot be undone. No suppression and no warm-up will be scheduled; " +
                         $"native RegentFX behavior is untouched. Observations (not proof of success): ModSceneCache.Count={cachedCount}, " +
                         $"RegentFX PreloadEffects setting reads {(preloadSetting.HasValue ? preloadSetting.Value.ToString() : "unknown")}.");
@@ -258,9 +281,10 @@ public partial class MainFile : Node
             _phase = BindPhase.Armed;
             _provenance = OrderProvenance.Early;
             Log.Info(
-                "ARMED: watching assembly loads for RegentFX. ORDER REQUIREMENT: RegentFXFastBoot must load BEFORE RegentFX " +
-                "(place it above RegentFX in the mod list). If RegentFX was already initialized this launch, the launch is LATE " +
-                "and nothing will be suppressed or warmed.");
+                "ARMED: watching assembly loads for RegentFX. ORDER REQUIREMENT: RegentFXFastBoot must load BEFORE RegentFX. " +
+                "The game's modding screen cannot reorder mods, so use a load-order editor (Load Order Manager, Steam Workshop " +
+                "3747605109: open Load Order, move RegentFXFastBoot above RegentFX, Apply, restart). If RegentFX was already " +
+                "initialized this launch, the launch is LATE and nothing will be suppressed or warmed.");
         }
         catch (Exception e)
         {
