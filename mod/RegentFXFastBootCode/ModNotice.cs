@@ -245,16 +245,21 @@ internal sealed partial class ModNotice : Control, IScreenContext
     /// <summary>
     /// True when the container's single modal slot is occupied by something still alive.
     ///
-    /// Deliberately conservative in ONE direction only: a dangling OpenModal (holder freed, no
-    /// Clear() call) is treated as FREE, because that state is a permanent block otherwise and
-    /// the engine itself overwrites OpenModal on the next Add() regardless. A live holder is
-    /// never disturbed - this method only reads.
+    /// A LIVE holder is never disturbed: that path only reads, so an engine modal that is on
+    /// screen keeps the slot until it closes by itself.
     ///
-    /// The freed-holder case is not hypothetical: NConfirmModLoadingPopup and NGenericPopup both
-    /// end with QueueFreeSafely() and no Clear(), and NModalContainer has no child-exit handler.
-    /// Answering the mod-loading confirmation with "no" leaves exactly that state for the rest of
-    /// the session, and that popup is shown precisely when `SettingsSave.ModSettings == null`
-    /// (NMainMenu.cs:484-486) - i.e. to a first-time subscriber.
+    /// A holder that is provably FREED is a different case, and this is the only code that
+    /// recovers it. NConfirmModLoadingPopup and NGenericPopup both end with QueueFreeSafely()
+    /// and never call Clear(), and NModalContainer has no child-exit handler, so OpenModal keeps
+    /// pointing at the dead object. The engine cannot recover on its own: Add() early-returns
+    /// when OpenModal is non-null, i.e. it refuses in exactly this state. Leaving the slot alone
+    /// would therefore refuse this notice for the rest of the session, and the retry loop would
+    /// report it as a permanently busy slot.
+    ///
+    /// That state is reachable on the one launch that matters most: NConfirmModLoadingPopup is
+    /// shown when `SettingsSave.ModSettings == null && ModManager.Mods.Count > 0`
+    /// (NMainMenu.cs:484-486) - a first-time subscriber - and answering it frees the popup
+    /// without clearing the slot.
     ///
     /// Not recursive: the release is attempted at most once, so a Clear() that fails cannot loop.
     /// </summary>
@@ -266,11 +271,12 @@ internal sealed partial class ModNotice : Control, IScreenContext
         if (holder is GodotObject godotHolder && GodotObject.IsInstanceValid(godotHolder))
             return true;
 
-        // The recorded holder is no longer a valid object: the engine closed it without
-        // clearing the slot. Release the slot rather than staying blocked forever. Clear() also
-        // frees any other non-backstop child, which is safe here: the engine adds modals only
-        // through Add() (so the freed holder is the only candidate), and a child that Godot
-        // already freed is no longer in the tree.
+        // Release the dead holder through the engine's own Clear() rather than by writing
+        // OpenModal (it is a private setter, and going around it would leave the container's own
+        // bookkeeping inconsistent). Clear() also frees every other non-backstop child, which is
+        // safe here by the engine's own invariant: Add() refuses while OpenModal is non-null, so
+        // at most one live non-backstop child can exist, and the only holder recorded is a freed
+        // one. A child Godot already freed is no longer in the tree.
         MainFile.Log.Info(
             $"{PrefixFor(kind)}: the engine modal slot held a freed modal; releasing the slot so the notice can be shown");
         try

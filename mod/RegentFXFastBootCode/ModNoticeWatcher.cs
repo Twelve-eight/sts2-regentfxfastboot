@@ -95,7 +95,15 @@ internal sealed partial class ModNoticeWatcher : Node
     {
         try
         {
-            if (++_frames > MenuWaitFrameLimit)
+            // The frame budget applies ONLY to waiting for the menu. It used to be charged on
+            // every frame of the node's life, which broke the success path: that watcher is
+            // created once the warm-up has already finished, i.e. with the menu already up, so
+            // the counter reached the limit at exactly the frame the last modal-slot attempt
+            // would have run. The attempt limit was then unreachable and the drop line reported
+            // "the main menu did not appear within N frames" about a menu that had been up for a
+            // minute - a false explanation, and the failure mode most likely on a slow boot
+            // (exactly the machine this mod exists for).
+            if (!_menuSeen && ++_frames > MenuWaitFrameLimit)
             {
                 MainFile.Log.Warn(
                     $"{PrefixFor(_kind)}: the main menu did not appear within {MenuWaitFrameLimit} frames; the popup is dropped " +
@@ -123,7 +131,10 @@ internal sealed partial class ModNoticeWatcher : Node
                 return;
             _framesSinceAttempt = 0;
 
-            if (++_attempts > ShowAttemptLimit)
+            // The post-menu bound is this attempt limit, and it is what actually runs: the
+            // counter above is frozen once the menu is seen. 120 attempts x 30 frames is the
+            // same ~60s at 60fps.
+            if (_attempts >= ShowAttemptLimit)
             {
                 MainFile.Log.Warn(
                     $"{PrefixFor(_kind)}: the engine's modal slot stayed busy for {ShowAttemptLimit} attempts; the popup is dropped " +
@@ -131,6 +142,7 @@ internal sealed partial class ModNoticeWatcher : Node
                 QueueFree();
                 return;
             }
+            _attempts++;
 
             if (ModNotice.TryShow(_kind, _warmed))
                 QueueFree();

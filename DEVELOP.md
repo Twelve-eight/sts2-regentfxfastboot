@@ -51,6 +51,15 @@ RFX **必须早于** RegentFX 加载,否则 `LoadScenes` 前缀装上时初始�
 
 **时机**:进入主菜单后(`NGame.Instance.MainMenu != null`),延迟若干帧再弹,避免与引擎
 自己的模态(如 `NConfirmModLoadingPopup`)抢 `NModalContainer` 的唯一槽位.
+本机实测(BootTimer,39 mod):主菜单约 4.0s 出现,而预热跑在 4-22s 之后 -
+即成功弹窗的观察节点创建时主菜单已在,这是它的常态而非边缘情况.
+
+**有界预算(两段,互不共享计数器)**:
+- 等待主菜单:3600 帧(仅在尚未看到主菜单时计数);
+- 等待模态槽位:120 次 x 30 帧间隔(约 60s).
+两者曾共用一个计数器:成功路径上计数器恰好在第 120 次尝试那一帧到达上限,
+于是报出“主菜单未出现”(而它早已出现)且第二段预算永远不会运行.
+现已拆开:主菜单出现后第一段冻结,第二段才是真正生效的上限.
 
 **呈现**:引擎原生模态容器 `NModalContainer.Instance.Add(node)` + 自绘内容节点
 (与 Load Order Manager 同款骨架:全屏 `Control` -> 半透明 `ColorRect` 遮罩 ->
@@ -67,6 +76,15 @@ RFX **必须早于** RegentFX 加载,否则 `LoadScenes` 前缀装上时初始�
 
 **频率**:每种弹窗各仅提示一次(两个独立标志).状态在**展示成功时**记录(而不是按钮按下时),因此用户不点任何按钮直接退出游戏,下次也不会再弹.
 只有"确实显示过"才会记录 - 没能显示(模态槽位被占/主菜单未出现)时不记录,下次仍会尝试.
+
+**槽位判定按“存活”而非“非空”**:引擎的 `NConfirmModLoadingPopup` 与 `NGenericPopup`
+都以 `QueueFreeSafely()` 结束且**不**调 `Clear()`,而 `NModalContainer` 没有子节点离树回调,
+于是 `OpenModal` 会持续指向一个已释放对象.引擎自己的 `Add()` 在该状态下**也会拒绝**
+(它测的是同一个字段),所以这个状态不会自愈.可达路径恰好是新订阅者:
+`NConfirmModLoadingPopup` 的条件是 `SettingsSave.ModSettings == null && ModManager.Mods.Count > 0`
+(`NMainMenu.cs:484-486`),答完它后槽位就悬空一整个会话.
+`SlotBusy` 因此按存活判定:存活持有者只读不动,证明已释放的持有者用引擎自己的 `Clear()`
+释放一次(不递归,抛异常则报 busy 交给重试).
 
 **状态文件**:`OS.GetUserDataDir()/RegentFXFastBoot/notice.json`
 (Windows 即 `%APPDATA%/SlayTheSpire2/RegentFXFastBoot/notice.json`).

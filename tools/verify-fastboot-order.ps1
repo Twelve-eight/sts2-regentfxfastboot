@@ -227,6 +227,16 @@ if (-not (Test-Path $logPath)) {
         if ($succShown -ge 1 -and -not $succRecorded) {
             $fail.Add("the log says the success notice was shown but the state file does not record successShown=true: $noticeFile")
         }
+        # The reverse direction, which is the defect this contract exists to prevent: a flag
+        # recorded WITHOUT the notice ever being displayed would suppress a notice the player
+        # never saw. The mod records at display time for exactly this reason, so a recorded flag
+        # alongside a drop line and no shown line means that invariant broke.
+        if ($lateRecorded -and $noticeShown -eq 0 -and $noticeDropped -ge 1) {
+            $fail.Add("the state file records noticeShown=true but this launch's log shows the notice was dropped and never displayed; a notice the player never saw would be suppressed")
+        }
+        if ($succRecorded -and $succShown -eq 0 -and $succDropped -ge 1) {
+            $fail.Add("the state file records successShown=true but this launch's log shows the notice was dropped and never displayed; a notice the player never saw would be suppressed")
+        }
     } elseif ($noticeShown -ge 1 -or $succShown -ge 1) {
         $fail.Add("the log says a notice was shown but no state file exists at $noticeFile")
     }
