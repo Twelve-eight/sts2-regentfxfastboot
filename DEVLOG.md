@@ -211,3 +211,85 @@ json.dumps(obj, indent=2, ensure_ascii=False, separators=(",", ": ")).replace("\
 - **权威**:`G:\appdata\C-Users-o_Obl\Roaming\SlayTheSpire2\steam\76561199466878739\settings.save`
   (经 `C:\Users\o_Obl\AppData\Roaming\SlayTheSpire2` junction 访问同一字节).
 - **死文件,勿改**:`G:\steam\steamapps\common\Slay the Spire 2\SlayTheSpire2\steam\76561199466878739\settings.save`.
+
+## 2026-09-16 (02:2x) 实机三连跑证据 + LOM 工具发现 + 当前仍晚序的真因
+
+### 三次会话(用户 logs 目录逐行核对)
+
+| 日志文件 | 会话起点 | 排序结果 | 结局 |
+|---|---|---|---|
+| `godot2026-09-16T02.27.53.log` | ~02:27 | RegentFX@21, RFX@35 | `LATE-ORDER` |
+| `godot2026-09-16T02.29.01.log` | 02:28:03 | RFX@34, RegentFX@35 | **成功全链路** |
+| `godot.log`(本轮当前) | 02:29:13 | RegentFX@27, RFX@40 | `LATE-ORDER` |
+
+**RFX 本体已被实机证明可用**(02:28 会话,完整链条,非推断):
+
+```
+ARMED: watching assembly loads for RegentFX
+BOUND: skip binding installed on RegentFX.Scripts.Entry.LoadScenes
+INTERCEPTED: RegentFX.Entry.LoadScenes entered
+QUEUED: 32 scene paths for one-per-frame idle warm-up; original preload suppressed.
+ATTACHED: warmer node entered the live NGame's tree (parent 'Game'); queue=32
+WARMED x32   (每条: loaded through the live NAssetLoader and published to RegentFX's ModSceneCache)
+COMPLETED (the queue drained): warmed=32, alreadyCached=0, failed=0, notSubmitted=0.
+```
+
+该轮输入正是 01:07 手工修复的文件(RFX@34 / RegentFX@35),且引擎排序日志同步输出
+`34 RegentFX Fast Boot (RegentFXFastBoot)` / `35 万象辉星[RegentFX] (RegentFX)`.
+即:**顺序一旦正确,拦截、抑制原始预加载、异步预热 32 个场景全部成功,零失败**.
+
+### 工具发现:Load Order Manager 工坊 `3747605109` 就是引擎缺失的调序 UI
+
+- v0.3.0,78,371 订阅 / 6,243 收藏 / 104,145 浏览;摘要自述 "Add a load-order editor in Modding screen".
+- 实现:在官方 `NModdingScreen` 注入"加载顺序"按钮(`ModdingScreenReadyPatch`,Harmony postfix on
+  `NModdingScreen._Ready`),面板 `LoadOrderPanel` 提供 上移/下移/置顶/置底/智能排序/首字母排序/
+  启用禁用/预设/剪贴板导入导出.
+- **自身不需要加载顺序**:入口是 `[ModuleInitializer]`(`ModuleInit.Initialize`)再 `Harmony.PatchAll`,
+  不依赖它自己的 `_mods` 位置.
+- 收集来源:`ModManager.AllMods`(本引擎无此成员)-> 回退 `ModManager._mods`(private static 字段,反射可读),
+  **无 `affects_gameplay` 过滤**,故 `affects_gameplay:false` 的 RFX 会出现在面板中(与 RitsuLib 的
+  `SortDeterministically` 不同,后者按"相关 mod"过滤,无法处理本对).
+- 写盘:`SettingsSave.ModSettings.ModList` 反射赋值 -> `SaveManager.SaveSettings()` 立即落盘,
+  带 `IsOrderMonotonic` 回读校验 + `last_apply_<uid>.json` 快照 + `ValidateCurrentUserScope` 防跨账号写.
+- 载荷 `LoadOrderManager.dll` 74752 B sha256 `d24323a0beb94526`;条目 `mod_manifest.json`(注意不是
+  `LoadOrderManager.json`),`has_dll:true` `has_pck:false` `affects_gameplay:false`,更新于 2026-06-28.
+- 实机日志证实可用:`Injected load-order button into ..NModdingScreen.` /
+  `Load-order button clicked.` / `ReadLoadedMods: AllMods empty, fallback to ModManager._mods (54).` /
+  `Loaded 54 mods into panel.` / `SaveSettings succeeded.` / `Apply succeeded. Restart required for effect.`
+- 对 0.111.0 引擎的反射目标逐一核对均存在:`ModManager._mods`(private static),
+  `Mod.manifest`/`Mod.modSource`,`SettingsSaveMod{Id,Source,IsEnabled}`,
+  `SaveManager._saveStore.GetFullPath(string)`,`PlatformUtil.PrimaryPlatform`/`GetLocalPlayerId`.
+
+### 当前仍晚序的真因:LOM 快照显示第二行没被动到
+
+`..\SlayTheSpire2\LoadOrderManager\state\last_apply_76561199466878739.json`(54 项)中与本对相关的四项:
+
+```
+idx 34  RegentFXFastBoot::1   (本地 mods_directory)
+idx 35  RegentFX::2
+idx 43  LoadOrderManager::2
+idx 50  RegentFXFastBoot::2   (工坊副本,运行时被判 DisabledDuplicate)
+```
+
+用户把 `::1` 移到 34(相对 RegentFX 已正确),但 `::2` 仍留在 50.
+`SortModList` 的 `dictionary2[manualOrdering[num2].Id] = num2` **只按 id 建索引、同一 id 最后一行胜出**
+-> `priority[RegentFXFastBoot] = 50` > `priority[RegentFX]` -> 本轮仍晚序.
+
+且禁用副本每轮都被 `list5.AddRange(list2)` 重新追加到尾部,随后又按 `_mods` 顺序写回文件,
+所以**任何面板内排序都无法持久** -- 即使把 `::2` 也移到 RegentFX 上方,也只多活一轮.
+
+**结论:必须先让 RFX 在本机只剩一份**,LOM 的排序才能持久.对纯订阅者(只有工坊一份)不存在该问题,
+LOM 即是可执行的订阅者路径.
+
+### 处置顺序(本地,取代上一节的"先取消订阅"写法)
+
+1. 二选一消除重复:删本地 `mods\RegentFXFastBoot\`(得到与订阅者完全一致的机器),
+   或取消订阅工坊 `3799305611`(保留本地开发副本);
+2. 启动一次让引擎按 `_mods` 重写 `mod_list`(陈旧行会被自动丢弃,LOM 面板亦只显示在场 mod);
+3. 打开 LOM "加载顺序",把唯一那条 `RegentFXFastBoot` 移到 `RegentFX` 上方,点"应用";
+4. 重启验证:无 `LATE-ORDER:`,且出现 `ARMED`/`INTERCEPTED`/`WARMED`.
+
+### 验证状态(诚实声明)
+
+- "RFX 可用"由 02:28 会话日志直接证明;"当前仍晚序"由当前 `godot.log` 的 `LATE-ORDER:` 与 LOM 快照直接证明.
+- 本节所有结论来自实机日志与反编译/反射目标核对,未新增任何推断性机制.
