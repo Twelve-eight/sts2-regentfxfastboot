@@ -353,3 +353,28 @@ LOM 即是可执行的订阅者路径.
 
 - `DEVELOP.md`:新建,记录 RFX 的行为契约(顺序前提,引擎事实表,交付路径,不变式,构建发布).
   此前该仓库只有 DEVLOG.md 与 astra-advice.md,没有设计/契约文档.
+
+### 会话收尾:上传被 Steam Guard 阻塞(2026-09-16 03:1x)
+
+- 仓库已提交推送:`bee20d5`(工作树干净).
+- 载荷已就位:`workshop/content/RegentFXFastBoot/` 下 DLL `cb5cb518e093752c`(53248 B)、
+  json `39ef4122bb5685dc`(version 0.3.0)、pdb `7211f2dd9b0345b8`.
+- 发布守卫通过:`refresh-workshop-payloads.ps1` exit 0(8/8 ALREADY_CURRENT),`test-push-verification.ps1` 9/9.
+- **上传未完成**:steamcmd 本次登录被要求设备确认.证据 `logs/connection_log.txt`:
+  `cannot call UpdateAuthSessionWithSteamGuardCode because we do not have a code available` 后连续
+  `Waiting for confirmation`,`03:13:38 Timed out waiting for confirmation`.
+  对照:09-15 23:21 与 23:25 两次登录均为 `RecvMsgClientLogOnResponse() : OK`(缓存令牌当时有效).
+  结论:Steam 侧缓存令牌已失效,需要人工完成设备确认/提供验证码,不是内容或 VDF 问题.
+
+### verify-fastboot-order.ps1 当前为 FAIL(预期,尚未重启游戏)
+
+`settings.save` 54 行中仍有**两行** RFX:
+```
+idx 27  RegentFX           source=steam_workshop  enabled=True
+idx 40  RegentFXFastBoot   source=mods_directory  enabled=True   <- 本地副本遗留行,目录已删
+idx 50  RegentFXFastBoot   source=steam_workshop  enabled=True   <- 唯一真实安装
+```
+第 40 行是已删除本地副本的陈旧记录(`mods_directory` 目录已不存在).
+`ModManager.Initialize` 每轮按 `_mods`(实际在场 mod)重建 `mod_list`,因此**启动一次游戏即会清除该行**;
+之后 LOM 面板只会显示唯一一行,把它移到 RegentFX 上方并应用即可持久.
+在完成这两步之前,脚本报 FAIL 是如实反映现状,不是回归.
