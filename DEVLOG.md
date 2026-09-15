@@ -498,3 +498,35 @@ staged : 223 strings  cb5cb518e093752c
 - 载荷:`f0b75498cb88f1fe`,IL 与 HEAD 构建逐字符同一.
 - 发布守卫:exit 0.
 - **工坊:0.2.0(未发布 0.3.0)**;实机启动加载的是旧 DLL,弹窗不会出现.
+
+### 新增实机验收前置门禁(2026-09-16 04:2x)
+
+**问题**:工坊订阅下载是**异步**的.推送被接受 != live 副本已更新.
+而 `refresh-workshop-payloads.ps1` 只查仓库暂存树,steamcmd 日志只证明上传被接受 -
+**两者都不看 live 副本**.在这个窗口里启动游戏,跑的是旧 DLL,"没看到弹窗"就是**假阴性**.
+
+**处置**:新增 `tools/check-live-payload.ps1`(哈希门禁),已接入 `DEVELOP.md` 验收顺序第 0 步.
+实测三场景:
+
+| 场景 | 结果 |
+|---|---|
+| live 与暂存字节相同 | `OK` exit 0 |
+| 仅内嵌版本串不同(provenance) | `OK (provenance only)` exit 0 |
+| live 0.2.0 vs 暂存 0.3.0(真过期) | `STALE` exit 1 |
+
+设计要点:哈希不同时**不直接判过期**,而是比对 UTF-16 用户字符串集合(代码级,忽略版本 blob);
+集合相同则再显式比对内嵌版本属性,确认差异确属 provenance 才放行.
+这样既不会把"仅 sha 不同"误报为过期,也不会把"仅版本串相同但代码已变"误判为同一.
+
+**顺带核实(解除一个我自己的疑虑)**:`mod_list` 的重写位于
+`if (_settings != null && _settings.PlayerAgreedToModLoading)` 分支(`ModManager.cs:135-148`),
+而该属性的序列化名是 `mods_enabled`(`ModSettings.cs:10-11`),本机为 `true` -> 走重建分支,
+所以验收顺序第 2 步"启动一次即清掉 idx 40 陈旧行"**成立**.
+反证:若该标志为假,`ModManager.cs:675` 会把每个 mod 置为 Disabled,而本机 mod 正常加载.
+
+**环境事实(本次自查发现)**:本机 `mods/` 目录仍有 13 个本地 mod,其中 9 个与工坊重复
+(Perfect/Mesugaki/RegentFemPortraits/Spire1/MpConfigSync/HeartShake/QuriousCraftingRelics/AutoAnthonyRelics/ChaosBridge),
+`settings.save` 里各自两行.引擎 tie-break 规则(`ModManager.RemoveDisabledMods`):
+本地副本先入字典,工坊副本在**版本相同/未知或更低**时被禁用 -> **本地副本胜出**.
+RFX 的本地副本**已删除**,字典无该 id,所以工坊副本不会被禁用 -> 推 0.3.0 对本机有效.
+(其余 8 个 mod 的双份状态是用户自己的环境,不在本任务范围.)

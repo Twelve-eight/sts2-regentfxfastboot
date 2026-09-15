@@ -68,6 +68,11 @@ RFX **必须早于** RegentFX 加载,否则 `LoadScenes` 前缀装上时初始�
 弹窗**只在确定性晚序**被调度(`LateOrderNoticeWatcher.Schedule()` 仅出现在
 `ModSceneCache.Count > 0` 分支),所以观察它必须发生在修好顺序**之前**:
 
+0. **先跑 `tools/check-live-payload.ps1`(exit 0 才继续)**.工坊订阅下载是**异步**的:
+   推送被接受不等于 live 副本已更新,而 `refresh-workshop-payloads.ps1`(查仓库暂存树)与
+   steamcmd 日志(只证明上传被接受)**都不看 live 副本**.若在此窗口启动,跑的是旧 DLL,
+   "没看到弹窗"就是**假阴性**.该脚本按哈希比对 live 与暂存,并在哈希不同但仅内嵌版本串不同时
+   正确放行(provenance 差异不是代码差异).
 1. 推出 0.3.0(或覆盖工坊内容目录),使实机加载的是含弹窗的 DLL.
 2. **在顺序仍然错误的状态下启动游戏**(此时 `settings.save` 为 RFX@50 vs RegentFX@27,仍晚序):
    进主菜单后应出现一次弹窗,然后退出.预期日志:
@@ -86,6 +91,12 @@ RFX **必须早于** RegentFX 加载,否则 `LoadScenes` 前缀装上时初始�
 **本机当前仍有两行 RFX**:`settings.save` 的 `idx 40` 是已删除本地副本的陈旧行
 (`mods_directory`),`idx 50` 是工坊行.`ModManager.Initialize` 每轮按 `_mods`(实际在场 mod)
 重建 `mod_list`,所以上面第 2 步那次启动会一并清除 idx 40,此后 LOM 只显示唯一一行.
+
+重建的前提已核实:`mod_list` 的重写位于 `if (_settings != null && _settings.PlayerAgreedToModLoading)`
+分支内(`ModManager.cs:135-148`),而 `PlayerAgreedToModLoading` 的序列化名是
+`mods_enabled`(`ModSettings.cs:10-11`),本机该字段为 `true`;否则走 else 分支把列表清空
+(`ModManager.cs:150`).反证:若该标志为假,`ModManager.cs:675` 会把每个 mod 置为 Disabled,
+而本机 mod 正常加载.
 
 ## 5. 不变式(不得破坏)
 

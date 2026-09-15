@@ -115,7 +115,11 @@ if (-not (Test-Path $logPath)) {
     $noticeStateOk = ([regex]::Matches($log, 'NOTICE: one-shot state recorded')).Count
     $noticeStateFail = ([regex]::Matches($log, 'one-shot state could not be written')).Count
     $noticeAlready = ([regex]::Matches($log, 'already shown in an earlier launch')).Count
-    $noticeDropped = ([regex]::Matches($log, 'popup is dropped for this launch')).Count
+    # Matches the payload's actual wording. The drop lines are interpolated, so the stable
+    # substring is "is dropped for this launch" (the full literal in the DLL reads
+    # ".. the late-order popup is dropped for this launch"); a pattern that assumed
+    # "popup is dropped for this launch" would never match.
+    $noticeDropped = ([regex]::Matches($log, 'is dropped for this launch')).Count
 
     if ($noticeShown -gt 1) {
         $fail.Add("the late-order notice was shown $noticeShown times in one launch; it must be shown at most once")
