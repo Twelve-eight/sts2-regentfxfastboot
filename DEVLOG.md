@@ -578,3 +578,22 @@ RFX 的本地副本**已删除**,字典无该 id,所以工坊副本不会被禁�
 
 当前载荷:DLL `59a03fc6afac3ac3`(54272 B),PDB `a3a964dc31a4dbd0`,json 不变 `39ef4122bb5685dc`.
 契约检查:DLL 内**无** `ModList`/`SaveSettings`/`SettingsSaveMod` 引用(不写用户配置);中文串全部就位(UTF-16 命中 5 组).
+
+### 修正验收步骤 5 的错误预期(2026-09-16 05:1x)
+
+**错误**:DEVELOP.md 步骤 5 原写"重启验证 .. 且此时不应再出现弹窗(日志应显示 `already shown in an earlier launch`)".
+
+**为什么错**:该串只在 `LateOrderNoticeWatcher.Schedule()` 内部发出(LateOrderNoticeWatcher.cs:57),
+而 `Schedule()` 的**唯一调用点**是 `MainFile.cs:286`(确定性晚序分支).
+步骤 5 那次启动是**早序**(顺序已修好),根本不会调用 `Schedule()`,所以该串**不可能**出现.
+按原预期判定会得出"失败"的错误结论.
+
+**已修正为**:步骤 5 应期望"日志里不出现任何 `NOTICE:` 行"(脚本会报
+`no notice scheduled (correct for an early-order run)`);并注明:要验证"一次性状态确实抑制了弹窗",
+必须**保持晚序**再启动一次(即调序之前),调序后的早序运行无法验证抑制逻辑.
+
+### 上传:第五次尝试仍被阻塞
+
+`Waiting for confirmation` -> `Timed out waiting for confirmation` -> `ERROR (Timeout)`,`workshop_log` 无上传行.
+工坊仍为 0.2.0.五次尝试(02:46 / 03:11 / 03:2x / 04:4x / 05:1x)形态完全一致,
+确认是 Steam 侧要求设备确认,非内容或 VDF 问题.

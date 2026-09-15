@@ -84,8 +84,13 @@ RFX **必须早于** RegentFX 加载,否则 `LoadScenes` 前缀装上时初始�
    这一次启动同时会清掉 `settings.save` 里的陈旧行(见下),不要为此重复启动.
 4. 之后才用 LOM 打开"加载顺序",把唯一那条 `RegentFXFastBoot` 移到 `RegentFX` 上方,点"应用".
 5. 重启验证加速生效:`tools/verify-fastboot-order.ps1` 应 exit 0(无 `LATE-ORDER`,出现
-   `ARMED`/`BOUND`/`INTERCEPTED`/`WARMED`),且此时**不应**再出现弹窗(日志应显示
-   `already shown in an earlier launch`).
+   `ARMED`/`BOUND`/`INTERCEPTED`/`WARMED`).
+   **这一次是早序运行,日志里不应出现任何 `NOTICE:` 行** - 脚本会报
+   `no notice scheduled (correct for an early-order run)`.
+   **不要**期望看到 `already shown in an earlier launch`:该串只在 `Schedule()` 内部,
+   而 `Schedule()` 的唯一调用点是确定性晚序分支(`MainFile.cs:286`),早序根本不会调用它.
+   若想验证"一次性状态确实抑制了弹窗",必须**保持晚序**再启动一次(即在第 4 步调序之前),
+   那时才会出现该串;调序之后的早序运行无法验证抑制逻辑.
 
 顺序若已先修好,弹窗只能靠临时把 RFX 移回 RegentFX 下方再启动一次来复测.
 早序运行永远不会调度弹窗 - 这是设计使然(早序本轮可能成功,弹窗会是错的),不是缺陷.
