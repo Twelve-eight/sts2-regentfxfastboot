@@ -2,16 +2,10 @@
   "id": "RegentFXFastBoot",
   "name": "RegentFX Fast Boot",
   "author": "omp",
-  "description": "Removes RegentFX's 4-second synchronous boot stall: skips the blocking preload and warms the same scene cache spread over idle main-menu frames instead.",
-  "version": "0.1.1",
+  "description": "Conditional boot-stall fix for RegentFX. Requires RegentFXFastBoot to load BEFORE RegentFX: place it above RegentFX in the game's mod list. In that order it skips RegentFX's synchronous scene preload (only when RegentFX's own PreloadEffects setting is on) and re-warms the same scene cache one scene per frame from the live NGame during menu idle time. If RegentFX initializes first, this launch is late-order: nothing is suppressed or warmed, and the log says so. First-combat warmth depends on timing and is not guaranteed. Requires RegentFX to be installed; BaseLib is no longer required.",
+  "version": "0.2.0",
   "min_game_version": "0.111.0",
   "has_pck": false,
   "has_dll": true,
-  "dependencies": [
-    {
-      "id": "BaseLib",
-      "min_version": "3.4.5"
-    }
-  ],
   "affects_gameplay": false
 }
