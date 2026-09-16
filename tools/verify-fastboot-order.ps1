@@ -124,8 +124,10 @@ if (-not (Test-Path $logPath)) {
     $noticeAlready = ([regex]::Matches($log, 'NOTICE: popup already shown in an earlier launch')).Count
     # The drop lines are interpolated, so they are matched by their stable opening clause and
     # scoped by the notice prefix. An unscoped 'is dropped for this launch' would also match
-    # the success notice's drop line and report it as a dropped late-order notice.
-    $noticeDropped = ([regex]::Matches($log, 'NOTICE: the (main menu did not appear within|engine''s modal slot stayed busy for)')).Count
+    # the success notice's drop line and report it as a dropped late-order notice. The third
+    # alternative is the menu-departure path (WS-0916-03): the menu was seen and then went away
+    # before the popup could be shown, which is a drop like the other two, not a missing outcome.
+    $noticeDropped = ([regex]::Matches($log, 'NOTICE: the (main menu did not appear within|engine''s modal slot stayed busy for|main menu went away before the popup could be shown)')).Count
 
     if ($noticeShown -gt 1) {
         $fail.Add("the late-order notice was shown $noticeShown times in one launch; it must be shown at most once")
@@ -166,7 +168,7 @@ if (-not (Test-Path $logPath)) {
     $succStateOk = ([regex]::Matches($log, 'NOTICE-SUCCESS: one-shot state recorded')).Count
     $succAlready = ([regex]::Matches($log, 'NOTICE-SUCCESS: popup already shown in an earlier launch')).Count
     $succStateFail = ([regex]::Matches($log, 'NOTICE-SUCCESS: the notice was shown but its one-shot state could not be written')).Count
-    $succDropped = ([regex]::Matches($log, 'NOTICE-SUCCESS: the (main menu did not appear within|engine''s modal slot stayed busy for)')).Count
+    $succDropped = ([regex]::Matches($log, 'NOTICE-SUCCESS: the (main menu did not appear within|engine''s modal slot stayed busy for|main menu went away before the popup could be shown)')).Count
     # The warm-up outcome the popup is allowed to describe.
     $completed = [regex]::Match($log, 'COMPLETED \([^)]*\): warmed=(\d+), alreadyCached=(\d+), failed=(\d+), notSubmitted=(\d+)')
 

@@ -138,8 +138,9 @@ namespace RegentFXFastBoot.RegentFXFastBootCode;
 ///    RegentFXFastBoot_NoticeWatcher): producer = Initialize's definitive-late branch only;
 ///    owner = this mod, attached to the SceneTree root (deferred) so no NGame lifecycle can
 ///    drop it early; first consumer = its own _Process; cleanup = QueueFree on every
-///    terminal path (notice shown, frame budget exhausted, modal slot never freed). At most
-///    one is ever created per launch, and it is never created for Early or Unknown order.
+///    terminal path (notice shown, menu-wait frame budget exhausted, main menu seen and
+///    then departed, modal slot never freed). At most one is ever created per launch, and
+///    it is never created for Early or Unknown order.
 ///    The notice node it adds lives inside the engine's NModalContainer (which owns its
 ///    lifetime) and closes through NModalContainer.Clear(), exactly like the engine's own
 ///    mod-loading confirmation.

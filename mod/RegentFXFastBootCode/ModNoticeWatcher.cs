@@ -17,14 +17,14 @@ namespace RegentFXFastBoot.RegentFXFastBootCode;
 ///     the player learns the mod did something rather than silently changing boot behaviour.
 ///
 /// Lifecycle: producer = MainFile (Schedule); owner = this mod; first consumer = _Process;
-/// cleanup = QueueFree on every terminal path (shown, gave up, no main menu). It is attached
-/// to the scene tree ROOT rather than to NGame so that it survives whatever the engine does
-/// with the game node, and it is freed as soon as its single job is done - it never becomes a
-/// permanent per-frame cost.
+/// cleanup = QueueFree on every terminal path (shown, gave up, no main menu, menu departed).
+/// It is attached to the scene tree ROOT rather than to NGame so that it survives whatever
+/// the engine does with the game node, and it is freed as soon as its single job is done - it
+/// never becomes a permanent per-frame cost.
 ///
-/// Bounded on every axis: a frame budget for the menu to appear and a small retry budget for
-/// the modal container to be free. A notice that cannot be shown is reported, never retried
-/// forever, and never recorded as shown.
+/// Bounded on every axis: a frame budget for the menu to appear, a departure grace after it
+/// has been seen, and a small retry budget for the modal container to be free. A notice that
+/// cannot be shown is reported, never retried forever, and never recorded as shown.
 /// </summary>
 internal sealed partial class ModNoticeWatcher : Node
 {
@@ -42,12 +42,31 @@ internal sealed partial class ModNoticeWatcher : Node
     /// <summary>Frames between modal-slot attempts (the slot is often taken for a frame or two).</summary>
     private const int ShowRetryInterval = 30;
 
+    /// <summary>
+    /// Consecutive frames without a main menu, after one has already been seen, that still count
+    /// as the same menu rather than as a departure.
+    ///
+    /// Why a tolerance is needed at all: NGame.MainMenu is RootSceneContainer.CurrentScene cast
+    /// to NMainMenu, and CurrentScene reports null while the scene it holds is queued for
+    /// deletion or is being replaced (NSceneContainer.cs CurrentScene / SetCurrentScene). One
+    /// such frame during menu construction or a menu reload is not the player leaving, and
+    /// treating it as a departure would abandon a notice that was about to be shown.
+    ///
+    /// Why it is this small: the engine replaces the current scene synchronously inside
+    /// SetCurrentScene, so an absence caused by construction lasts the frames that call needs to
+    /// finish - one or two - while every real departure is a screen transition (RunManager
+    /// cleanup, fade, asset load) that lasts seconds. 3 frames (~50ms at 60fps) covers the former
+    /// with margin and cannot swallow the latter.
+    /// </summary>
+    private const int MenuDepartureToleranceFrames = 3;
+
     private NoticeKind _kind;
     private int _warmed;
     private int _frames;
     private int _settleFrames;
     private int _attempts;
     private int _framesSinceAttempt;
+    private int _absentFrames;
     private bool _menuSeen;
 
     /// <summary>
@@ -114,7 +133,30 @@ internal sealed partial class ModNoticeWatcher : Node
 
             MegaCrit.Sts2.Core.Nodes.NGame? nGame = MegaCrit.Sts2.Core.Nodes.NGame.Instance;
             if (nGame == null || !GodotObject.IsInstanceValid(nGame) || nGame.MainMenu == null)
+            {
+                // Before the menu has been seen this is simply "not up yet", and the frame
+                // budget above owns that wait. AFTER it has been seen it is a departure, and
+                // it needs its own terminal path: this node lives on the SceneTree root, so
+                // nothing about leaving the menu frees it, and without this branch the frame
+                // counter above (frozen at the frame the menu appeared) and the attempt
+                // counter below (never reached) would both stand still for the rest of the
+                // session - a root-owned node polling forever, and a notice that is neither
+                // shown nor reported as dropped.
+                if (!_menuSeen)
+                    return;
+
+                if (++_absentFrames <= MenuDepartureToleranceFrames)
+                    return;
+
+                MainFile.Log.Warn(
+                    $"{PrefixFor(_kind)}: the main menu went away before the popup could be shown (no main menu for " +
+                    $"{_absentFrames} consecutive frames); the popup is dropped for this launch and will be offered again next launch");
+                QueueFree();
                 return;
+            }
+            // The menu is back (or never left). Any absence counted above was transient, and
+            // the notice is still owed.
+            _absentFrames = 0;
 
             if (!_menuSeen)
             {

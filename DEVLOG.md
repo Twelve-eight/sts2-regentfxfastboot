@@ -750,3 +750,83 @@ RFX 的本地副本**已删除**,字典无该 id,所以工坊副本不会被禁�
 - 审查代理 `Rfx4Review` 在缺陷 1 修复前派出,其报告将描述已不存在的版本,已取消(AGENTS.md Sec 11);
   其负责的 6 个审查面向改由主会话自查完成:节点生命周期与 Godot API 用法,单槽位协议,
   观察器预算算术,`NoticeState` 双键读写,成功通知的触发边界,验收脚本的误判输入.
+
+---
+
+## 2026-09-16 (WS-0916-03) 观察器的第四个缺陷:看到菜单后离开会永久轮询
+
+来源:工作区审查 `docs/workspace-state-evidence/2026-09-16-review/findings.json` WS-0916-03
+(证据 `notice-lifecycle-model.json`,源 sha256 `136db76663a9..`).
+
+### 缺陷(高):根节点在"看到菜单后离开"路径上永不释放
+
+`ModNoticeWatcher` 挂在 SceneTree **根**上(刻意的:不被 NGame 的生命周期带走),所以
+**离开主菜单不会释放它**.而 `_Process` 里:
+
+- 第一段预算 `if (!_menuSeen && ++_frames > MenuWaitFrameLimit)` 在 `_menuSeen` 之后按设计冻结;
+- 紧随其后的 `if (nGame == null || !IsInstanceValid(nGame) || nGame.MainMenu == null) return;`
+  无条件返回,而模态槽位那段预算在这个 `return` 的**下方**;
+- 于是"菜单出现一帧 -> 玩家离开"之后:`_frames` 与 `_attempts` 都停住,节点每帧轮询到会话结束,
+  通知既没弹出也**没有**被报告为丢弃.
+
+审查模型记录的状态与本次建模复现的状态逐项一致:
+`menuSeen=true, frames=1, settleFrames=1, attempts=0, framesSinceAttempt=0, freed=false`
+(场景:菜单在场一帧,随后缺席 10000 帧,`TryShow` 从未被调用).
+
+### 修法
+
+`_menuSeen` 之后菜单连续缺席超过 `MenuDepartureToleranceFrames` 帧即判为**离开**:
+记一条如实日志(`the main menu went away before the popup could be shown (no main menu for N
+consecutive frames)`)并 `QueueFree()`;未显示**不**写一次性状态,下次启动仍会尝试.
+
+宽限帧存在的理由:`NGame.MainMenu` 是 `RootSceneContainer.CurrentScene as NMainMenu`,而
+`CurrentScene` 在持有场景被排队释放或正在替换时报 null(`NSceneContainer.cs`).菜单构建/重载
+期间出现一两帧 null 不是玩家离开,把它当离开会让一个本来会弹出的通知被放弃.取 3 帧(~50ms):
+`SetCurrentScene` 是同步替换,构建期的缺席只有一两帧;真实离开是 RunManager 清理 + 淡出 +
+资源加载,以秒计 - 两者相差两个数量级,不可能混淆.
+
+**未改动**:重试间隔 30 帧,尝试上限 120,菜单等待上限 3600,两个日志前缀,两种通知的调度规则
+(`LateOrder` 只在确定性晚序,`Succeeded` 只在 `CompleteWarmUp` 且 warmed>0/failed=0/pending=0).
+
+### 决策模型(不是实机验证)
+
+新增 `tools/notice-lifecycle/model.py`:逐帧建模 `_Process`,常量**从 C# 源解析**(不重打),
+并断言 `_Process` 的检查顺序与离开分支的位置/形状 - 源码一改就报错,而不是安静地建模一个
+已不存在的函数.三个变体:`pre`(修复前控制流),`post`(已交付),`post_no_tolerance`
+(把宽限置 0,用来证明宽限是必需的而不是装饰).场景与结果:
+
+| 场景 | pre | post | post_no_tolerance |
+|---|---|---|---|
+| a 菜单始终不出现 | 第 3601 帧丢弃并释放 | 同左 | 同左 |
+| b 菜单一帧后永久离开 | **不释放(缺陷)** | 第 5 帧丢弃并释放 | 第 2 帧丢弃并释放 |
+| c 槽位始终忙 | 第 3630 帧丢弃(尝试=120) | 同左 | 同左 |
+| d 正常成功 | 第 30 帧显示并释放 | 同左 | 同左 |
+| e 单帧瞬时缺席 | 第 31 帧显示 | **第 31 帧显示(宽限生效)** | **第 2 帧丢弃(回归)** |
+| e2 缺席超过宽限后回来 | 第 34 帧显示 | 第 5 帧丢弃(宽限有界) | 第 2 帧丢弃 |
+| f 槽位稍后释放 | 第 210 帧显示(尝试=7) | 同左 | 同左 |
+| g 尝试开始后才离开 | **不释放** | 第 404 帧丢弃并释放 | 第 401 帧丢弃并释放 |
+
+不变式(每个变体、每个场景都检查):一帧内不重复计费/不跨段计费;看到菜单后菜单预算不再前进;
+`shown` 与一次性状态记录严格互为充要;丢弃必然释放且必然不显示、不记录;宽限只有在释放那一帧
+才被越过.另断言两个预算都仍可达:菜单等待预算由场景 a 触达,尝试预算由场景 c 触达(恰好 120),
+且场景 c/d 的 `frames==1` 证明菜单预算在看到菜单后确实冻结.
+
+`--source` 指向修复前的源码时,模型以
+`FATAL: MenuDepartureToleranceFrames not found ... the model is out of date` 退出 - 反漂移闸门有效.
+
+**诚实声明**:这是决策流建模,**不是实机验证**.没有 Godot 节点/SceneTree/原生回调/UI 被实例化,
+没有启动游戏或 Steam.它证明的是状态机在有界性、预算可达性、一次性记录语义上的行为,
+不证明引擎时序,也不证明弹窗的渲染与交互.
+
+### 顺带改动的验收脚本(主会话授权)
+
+`tools/verify-fastboot-order.ps1` 的 `$noticeDropped` / `$succDropped` 两条丢弃行正则原先只认
+"main menu did not appear within" 与 "engine's modal slot stayed busy for" 两个开头;新的离开
+路径会落进 `elseif ($noticeScheduled -ge 1)` 分支,被误报成"没有记录结果行".已各加**一个**
+候选 `main menu went away before the popup could be shown`.其余模式、格式与逻辑未动.
+`tools/check-live-payload.ps1` 未触碰(它带有别的未提交工作).
+
+### 未做
+
+- 实机验证:需要启动游戏,本批未授权.模型覆盖的是控制流,不是引擎行为.
+- 载荷未重建、未推送(构建与发布由主会话集中进行).

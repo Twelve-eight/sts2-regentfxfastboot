@@ -1,0 +1,636 @@
+{
+  "model": "ModNoticeWatcher._Process decision model (WS-0916-03)",
+  "note": "MODEL ONLY. No Godot node, SceneTree, native callback or UI was instantiated; no game and no Steam was launched. This proves decision flow, not engine timing.",
+  "source": "mod/RegentFXFastBootCode/ModNoticeWatcher.cs",
+  "limits": {
+    "MenuWaitFrameLimit": 3600,
+    "SettleFrames": 30,
+    "ShowAttemptLimit": 120,
+    "ShowRetryInterval": 30,
+    "MenuDepartureToleranceFrames": 3
+  },
+  "sourceShapeChecks": [
+    "check order: frame budget -> menu read -> departure -> settle -> attempt interval -> attempt limit -> TryShow",
+    "departure branch: inside the menu-absent branch, gated on _menuSeen, tolerant, logs a reason and frees",
+    "no direct MarkShown in _Process (state is recorded only by TryShow, on the success path)",
+    "departure tolerance is a positive named constant (3 frames)"
+  ],
+  "variants": {
+    "pre": {
+      "a_menu_never_appears": {
+        "scenario": "menu never appears -> bounded drop",
+        "state": {
+          "menuSeen": false,
+          "frames": 3601,
+          "settleFrames": 0,
+          "attempts": 0,
+          "framesSinceAttempt": 0,
+          "absentFrames": 0,
+          "freed": true,
+          "shown": false,
+          "stateRecorded": false,
+          "terminalFrame": 3601,
+          "dropReason": "main menu did not appear within the frame budget"
+        },
+        "expected": {
+          "freed": true,
+          "shown": false,
+          "stateRecorded": false,
+          "terminalFrame": 3601
+        },
+        "expectationMet": true,
+        "invariantViolations": []
+      },
+      "b_menu_departs_long": {
+        "scenario": "menu present one frame, then absent for the rest of the session -> bounded drop, freed",
+        "state": {
+          "menuSeen": true,
+          "frames": 1,
+          "settleFrames": 1,
+          "attempts": 0,
+          "framesSinceAttempt": 0,
+          "absentFrames": 0,
+          "freed": false,
+          "shown": false,
+          "stateRecorded": false,
+          "terminalFrame": null,
+          "dropReason": null
+        },
+        "expected": {
+          "menuSeen": true,
+          "frames": 1,
+          "settleFrames": 1,
+          "attempts": 0,
+          "framesSinceAttempt": 0,
+          "freed": false,
+          "shown": false,
+          "stateRecorded": false,
+          "terminalFrame": null
+        },
+        "expectationMet": true,
+        "invariantViolations": []
+      },
+      "c_slot_always_busy": {
+        "scenario": "modal slot always busy -> bounded drop",
+        "state": {
+          "menuSeen": true,
+          "frames": 1,
+          "settleFrames": 3630,
+          "attempts": 120,
+          "framesSinceAttempt": 0,
+          "absentFrames": 0,
+          "freed": true,
+          "shown": false,
+          "stateRecorded": false,
+          "terminalFrame": 3630,
+          "dropReason": "the engine's modal slot stayed busy for the whole attempt budget"
+        },
+        "expected": {
+          "freed": true,
+          "shown": false,
+          "stateRecorded": false,
+          "attempts": 120
+        },
+        "expectationMet": true,
+        "invariantViolations": []
+      },
+      "d_normal_success": {
+        "scenario": "normal success -> shown and freed",
+        "state": {
+          "menuSeen": true,
+          "frames": 1,
+          "settleFrames": 30,
+          "attempts": 1,
+          "framesSinceAttempt": 0,
+          "absentFrames": 0,
+          "freed": true,
+          "shown": true,
+          "stateRecorded": true,
+          "terminalFrame": 30,
+          "dropReason": null
+        },
+        "expected": {
+          "freed": true,
+          "shown": true,
+          "stateRecorded": true,
+          "terminalFrame": 30
+        },
+        "expectationMet": true,
+        "invariantViolations": []
+      },
+      "e_transient_absence": {
+        "scenario": "transient single-frame menu absence -> notice still shown",
+        "state": {
+          "menuSeen": true,
+          "frames": 1,
+          "settleFrames": 30,
+          "attempts": 1,
+          "framesSinceAttempt": 0,
+          "absentFrames": 0,
+          "freed": true,
+          "shown": true,
+          "stateRecorded": true,
+          "terminalFrame": 31,
+          "dropReason": null
+        },
+        "expected": {
+          "freed": true,
+          "shown": true,
+          "stateRecorded": true
+        },
+        "expectationMet": true,
+        "invariantViolations": []
+      },
+      "e2_absence_beyond_tolerance": {
+        "scenario": "menu absent for 4 frames then back -> bounded drop (the grace is bounded)",
+        "state": {
+          "menuSeen": true,
+          "frames": 1,
+          "settleFrames": 30,
+          "attempts": 1,
+          "framesSinceAttempt": 0,
+          "absentFrames": 0,
+          "freed": true,
+          "shown": true,
+          "stateRecorded": true,
+          "terminalFrame": 34,
+          "dropReason": null
+        },
+        "expected": {
+          "freed": true,
+          "shown": true,
+          "stateRecorded": true
+        },
+        "expectationMet": true,
+        "invariantViolations": []
+      },
+      "f_slot_frees_later": {
+        "scenario": "modal slot busy, then free -> shown once on a later attempt (retry interval intact)",
+        "state": {
+          "menuSeen": true,
+          "frames": 1,
+          "settleFrames": 210,
+          "attempts": 7,
+          "framesSinceAttempt": 0,
+          "absentFrames": 0,
+          "freed": true,
+          "shown": true,
+          "stateRecorded": true,
+          "terminalFrame": 210,
+          "dropReason": null
+        },
+        "expected": {
+          "freed": true,
+          "shown": true,
+          "stateRecorded": true,
+          "attempts": "<predicate>"
+        },
+        "expectationMet": true,
+        "invariantViolations": []
+      },
+      "g_departure_after_attempts": {
+        "scenario": "menu seen, slot busy, then the menu departs -> bounded drop, freed",
+        "state": {
+          "menuSeen": true,
+          "frames": 1,
+          "settleFrames": 400,
+          "attempts": 13,
+          "framesSinceAttempt": 10,
+          "absentFrames": 0,
+          "freed": false,
+          "shown": false,
+          "stateRecorded": false,
+          "terminalFrame": null,
+          "dropReason": null
+        },
+        "expected": {
+          "menuSeen": true,
+          "frames": 1,
+          "freed": false,
+          "shown": false,
+          "stateRecorded": false,
+          "terminalFrame": null,
+          "attempts": "<predicate>"
+        },
+        "expectationMet": true,
+        "invariantViolations": []
+      }
+    },
+    "post": {
+      "a_menu_never_appears": {
+        "scenario": "menu never appears -> bounded drop",
+        "state": {
+          "menuSeen": false,
+          "frames": 3601,
+          "settleFrames": 0,
+          "attempts": 0,
+          "framesSinceAttempt": 0,
+          "absentFrames": 0,
+          "freed": true,
+          "shown": false,
+          "stateRecorded": false,
+          "terminalFrame": 3601,
+          "dropReason": "main menu did not appear within the frame budget"
+        },
+        "expected": {
+          "freed": true,
+          "shown": false,
+          "stateRecorded": false,
+          "terminalFrame": 3601
+        },
+        "expectationMet": true,
+        "invariantViolations": []
+      },
+      "b_menu_departs_long": {
+        "scenario": "menu present one frame, then absent for the rest of the session -> bounded drop, freed",
+        "state": {
+          "menuSeen": true,
+          "frames": 1,
+          "settleFrames": 1,
+          "attempts": 0,
+          "framesSinceAttempt": 0,
+          "absentFrames": 4,
+          "freed": true,
+          "shown": false,
+          "stateRecorded": false,
+          "terminalFrame": 5,
+          "dropReason": "main menu went away (no main menu for 4 consecutive frames)"
+        },
+        "expected": {
+          "freed": true,
+          "shown": false,
+          "stateRecorded": false,
+          "terminalFrame": 5
+        },
+        "expectationMet": true,
+        "invariantViolations": []
+      },
+      "c_slot_always_busy": {
+        "scenario": "modal slot always busy -> bounded drop",
+        "state": {
+          "menuSeen": true,
+          "frames": 1,
+          "settleFrames": 3630,
+          "attempts": 120,
+          "framesSinceAttempt": 0,
+          "absentFrames": 0,
+          "freed": true,
+          "shown": false,
+          "stateRecorded": false,
+          "terminalFrame": 3630,
+          "dropReason": "the engine's modal slot stayed busy for the whole attempt budget"
+        },
+        "expected": {
+          "freed": true,
+          "shown": false,
+          "stateRecorded": false,
+          "attempts": 120
+        },
+        "expectationMet": true,
+        "invariantViolations": []
+      },
+      "d_normal_success": {
+        "scenario": "normal success -> shown and freed",
+        "state": {
+          "menuSeen": true,
+          "frames": 1,
+          "settleFrames": 30,
+          "attempts": 1,
+          "framesSinceAttempt": 0,
+          "absentFrames": 0,
+          "freed": true,
+          "shown": true,
+          "stateRecorded": true,
+          "terminalFrame": 30,
+          "dropReason": null
+        },
+        "expected": {
+          "freed": true,
+          "shown": true,
+          "stateRecorded": true,
+          "terminalFrame": 30
+        },
+        "expectationMet": true,
+        "invariantViolations": []
+      },
+      "e_transient_absence": {
+        "scenario": "transient single-frame menu absence -> notice still shown",
+        "state": {
+          "menuSeen": true,
+          "frames": 1,
+          "settleFrames": 30,
+          "attempts": 1,
+          "framesSinceAttempt": 0,
+          "absentFrames": 0,
+          "freed": true,
+          "shown": true,
+          "stateRecorded": true,
+          "terminalFrame": 31,
+          "dropReason": null
+        },
+        "expected": {
+          "freed": true,
+          "shown": true,
+          "stateRecorded": true
+        },
+        "expectationMet": true,
+        "invariantViolations": []
+      },
+      "e2_absence_beyond_tolerance": {
+        "scenario": "menu absent for 4 frames then back -> bounded drop (the grace is bounded)",
+        "state": {
+          "menuSeen": true,
+          "frames": 1,
+          "settleFrames": 1,
+          "attempts": 0,
+          "framesSinceAttempt": 0,
+          "absentFrames": 4,
+          "freed": true,
+          "shown": false,
+          "stateRecorded": false,
+          "terminalFrame": 5,
+          "dropReason": "main menu went away (no main menu for 4 consecutive frames)"
+        },
+        "expected": {
+          "freed": true,
+          "shown": false,
+          "stateRecorded": false,
+          "terminalFrame": 5
+        },
+        "expectationMet": true,
+        "invariantViolations": []
+      },
+      "f_slot_frees_later": {
+        "scenario": "modal slot busy, then free -> shown once on a later attempt (retry interval intact)",
+        "state": {
+          "menuSeen": true,
+          "frames": 1,
+          "settleFrames": 210,
+          "attempts": 7,
+          "framesSinceAttempt": 0,
+          "absentFrames": 0,
+          "freed": true,
+          "shown": true,
+          "stateRecorded": true,
+          "terminalFrame": 210,
+          "dropReason": null
+        },
+        "expected": {
+          "freed": true,
+          "shown": true,
+          "stateRecorded": true,
+          "attempts": "<predicate>"
+        },
+        "expectationMet": true,
+        "invariantViolations": []
+      },
+      "g_departure_after_attempts": {
+        "scenario": "menu seen, slot busy, then the menu departs -> bounded drop, freed",
+        "state": {
+          "menuSeen": true,
+          "frames": 1,
+          "settleFrames": 400,
+          "attempts": 13,
+          "framesSinceAttempt": 10,
+          "absentFrames": 4,
+          "freed": true,
+          "shown": false,
+          "stateRecorded": false,
+          "terminalFrame": 404,
+          "dropReason": "main menu went away (no main menu for 4 consecutive frames)"
+        },
+        "expected": {
+          "freed": true,
+          "shown": false,
+          "stateRecorded": false,
+          "terminalFrame": 404,
+          "attempts": "<predicate>"
+        },
+        "expectationMet": true,
+        "invariantViolations": []
+      }
+    },
+    "post_no_tolerance": {
+      "a_menu_never_appears": {
+        "scenario": "menu never appears -> bounded drop",
+        "state": {
+          "menuSeen": false,
+          "frames": 3601,
+          "settleFrames": 0,
+          "attempts": 0,
+          "framesSinceAttempt": 0,
+          "absentFrames": 0,
+          "freed": true,
+          "shown": false,
+          "stateRecorded": false,
+          "terminalFrame": 3601,
+          "dropReason": "main menu did not appear within the frame budget"
+        },
+        "expected": {
+          "freed": true,
+          "shown": false,
+          "stateRecorded": false,
+          "terminalFrame": 3601
+        },
+        "expectationMet": true,
+        "invariantViolations": []
+      },
+      "b_menu_departs_long": {
+        "scenario": "menu present one frame, then absent for the rest of the session -> bounded drop, freed",
+        "state": {
+          "menuSeen": true,
+          "frames": 1,
+          "settleFrames": 1,
+          "attempts": 0,
+          "framesSinceAttempt": 0,
+          "absentFrames": 1,
+          "freed": true,
+          "shown": false,
+          "stateRecorded": false,
+          "terminalFrame": 2,
+          "dropReason": "main menu went away (no main menu for 1 consecutive frames)"
+        },
+        "expected": {
+          "freed": true,
+          "shown": false,
+          "stateRecorded": false,
+          "terminalFrame": 2
+        },
+        "expectationMet": true,
+        "invariantViolations": []
+      },
+      "c_slot_always_busy": {
+        "scenario": "modal slot always busy -> bounded drop",
+        "state": {
+          "menuSeen": true,
+          "frames": 1,
+          "settleFrames": 3630,
+          "attempts": 120,
+          "framesSinceAttempt": 0,
+          "absentFrames": 0,
+          "freed": true,
+          "shown": false,
+          "stateRecorded": false,
+          "terminalFrame": 3630,
+          "dropReason": "the engine's modal slot stayed busy for the whole attempt budget"
+        },
+        "expected": {
+          "freed": true,
+          "shown": false,
+          "stateRecorded": false,
+          "attempts": 120
+        },
+        "expectationMet": true,
+        "invariantViolations": []
+      },
+      "d_normal_success": {
+        "scenario": "normal success -> shown and freed",
+        "state": {
+          "menuSeen": true,
+          "frames": 1,
+          "settleFrames": 30,
+          "attempts": 1,
+          "framesSinceAttempt": 0,
+          "absentFrames": 0,
+          "freed": true,
+          "shown": true,
+          "stateRecorded": true,
+          "terminalFrame": 30,
+          "dropReason": null
+        },
+        "expected": {
+          "freed": true,
+          "shown": true,
+          "stateRecorded": true,
+          "terminalFrame": 30
+        },
+        "expectationMet": true,
+        "invariantViolations": []
+      },
+      "e_transient_absence": {
+        "scenario": "transient single-frame menu absence -> notice still shown",
+        "state": {
+          "menuSeen": true,
+          "frames": 1,
+          "settleFrames": 1,
+          "attempts": 0,
+          "framesSinceAttempt": 0,
+          "absentFrames": 1,
+          "freed": true,
+          "shown": false,
+          "stateRecorded": false,
+          "terminalFrame": 2,
+          "dropReason": "main menu went away (no main menu for 1 consecutive frames)"
+        },
+        "expected": {
+          "freed": true,
+          "shown": false,
+          "stateRecorded": false,
+          "terminalFrame": 2
+        },
+        "expectationMet": true,
+        "invariantViolations": []
+      },
+      "e2_absence_beyond_tolerance": {
+        "scenario": "menu absent for 4 frames then back -> bounded drop (the grace is bounded)",
+        "state": {
+          "menuSeen": true,
+          "frames": 1,
+          "settleFrames": 1,
+          "attempts": 0,
+          "framesSinceAttempt": 0,
+          "absentFrames": 1,
+          "freed": true,
+          "shown": false,
+          "stateRecorded": false,
+          "terminalFrame": 2,
+          "dropReason": "main menu went away (no main menu for 1 consecutive frames)"
+        },
+        "expected": {
+          "freed": true,
+          "shown": false,
+          "stateRecorded": false,
+          "terminalFrame": 2
+        },
+        "expectationMet": true,
+        "invariantViolations": []
+      },
+      "f_slot_frees_later": {
+        "scenario": "modal slot busy, then free -> shown once on a later attempt (retry interval intact)",
+        "state": {
+          "menuSeen": true,
+          "frames": 1,
+          "settleFrames": 210,
+          "attempts": 7,
+          "framesSinceAttempt": 0,
+          "absentFrames": 0,
+          "freed": true,
+          "shown": true,
+          "stateRecorded": true,
+          "terminalFrame": 210,
+          "dropReason": null
+        },
+        "expected": {
+          "freed": true,
+          "shown": true,
+          "stateRecorded": true,
+          "attempts": "<predicate>"
+        },
+        "expectationMet": true,
+        "invariantViolations": []
+      },
+      "g_departure_after_attempts": {
+        "scenario": "menu seen, slot busy, then the menu departs -> bounded drop, freed",
+        "state": {
+          "menuSeen": true,
+          "frames": 1,
+          "settleFrames": 400,
+          "attempts": 13,
+          "framesSinceAttempt": 10,
+          "absentFrames": 1,
+          "freed": true,
+          "shown": false,
+          "stateRecorded": false,
+          "terminalFrame": 401,
+          "dropReason": "main menu went away (no main menu for 1 consecutive frames)"
+        },
+        "expected": {
+          "freed": true,
+          "shown": false,
+          "stateRecorded": false,
+          "terminalFrame": 401,
+          "attempts": "<predicate>"
+        },
+        "expectationMet": true,
+        "invariantViolations": []
+      }
+    }
+  },
+  "recordedEvidence": {
+    "scenario": "Menu present for one frame, then absent for 10000 frames; no TryShow call occurred.",
+    "recordedState": {
+      "menuSeen": true,
+      "frames": 1,
+      "settleFrames": 1,
+      "attempts": 0,
+      "framesSinceAttempt": 0,
+      "freed": false
+    },
+    "modelState": {
+      "menuSeen": true,
+      "frames": 1,
+      "settleFrames": 1,
+      "attempts": 0,
+      "framesSinceAttempt": 0,
+      "freed": false
+    },
+    "reproduced": true,
+    "sourceSha256Recorded": "136db76663a9a529fc2819bd1929d9454f2e21d58704c810d99d2e547e9be662"
+  },
+  "budgetReachability": {
+    "menuWaitBudgetReached (scenario a)": true,
+    "attemptBudgetReached (scenario c)": true,
+    "menuWaitBudgetFrozenOnceMenuSeen (c, d)": true
+  },
+  "failures": []
+}
