@@ -1,8 +1,8 @@
 "workshopitem"
 {
 	"appid"		"2868840"
-	"contentfolder"		"G:\\omp works\\sts2-regentfxfastboot\\workshop\\content"
-	"previewfile"		"G:\\omp works\\sts2-regentfxfastboot\\workshop\\preview.png"
+	"contentfolder"		"G:\\omp works\\Sts\\sts2-regentfxfastboot\\workshop\\content"
+	"previewfile"		"G:\\omp works\\Sts\\sts2-regentfxfastboot\\workshop\\preview.png"
 	"visibility"		"0"
 	"title"		"RegentFX Fast Boot (万象辉星启动加速)"
 	"description"		"[h1]RegentFX Fast Boot(万象辉星启动加速)[/h1]
@@ -17,7 +17,7 @@
 
 本 mod 只在满足前置顺序时生效:
 [list]
-[*][b]硬性顺序要求[/b]:RegentFXFastBoot 必须排在 RegentFX [b]上面[/b].顺序的载体是 settings.save 里的 mod_list,而游戏界面对它只能勾选启用/禁用,不能改顺序,因此必须用调序工具(见下方"使用方法").顺序不满足时,日志会如实报告 LATE-ORDER:本次启动不跳过任何内容,不做预热,启动卡顿(如发生)已经发生且无法撤回.
+[*][b]硬性顺序要求[/b]:RegentFXFastBoot 必须排在 RegentFX [b]上面[/b].顺序的载体是 settings.save 里的 mod_list,而游戏界面对它只能勾选启用/禁用,不能改顺序,因此必须用调序工具(见下方「使用方法」).顺序不满足时,日志会如实报告 LATE-ORDER:本次启动不跳过任何内容,不做预热,启动卡顿(如发生)已经发生且无法撤回.
 [*]顺序正确时:在 RegentFX 的程序集加载瞬间挂上方法绑定,等它的初始化器真正调用同步预加载入口时才拦截(此时 PCK 挂载、脚本注册、RegentFX 配置默认值都已完成)
 [*]仅当 RegentFX 自己的 PreloadEffects 开关为开启时才会发生拦截;该开关关闭时本 mod 不做任何预热,保持原生关闭预加载的策略
 [*]拦截后把相同的场景清单交给引擎自己的异步加载面(NAssetLoader/AssetLoadingSession)预热进 RegentFX 自己的缓存:同一时刻最多一个可选请求,只在主菜单空闲时提交,不抢占引擎必需资源的加载带宽;离开主菜单后不再提交新请求,已在途的请求观察到完成
@@ -35,11 +35,11 @@
 
 [list]
 [*]订阅本 mod 与 [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3747497501]RegentFX[/url]
-[*][b]关键步骤:设置加载顺序.[/b]游戏本体的模组界面[b]没有[/b]调整顺序的功能(只有启用/禁用勾选),所以顺序必须由调序工具写入.推荐 [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3747605109]Load Order Manager[/url]:装好后在模组界面点"加载顺序",把 RegentFXFastBoot 移到 RegentFX [b]上面[/b],点"应用",重启游戏生效.
+[*][b]关键步骤:设置加载顺序.[/b]游戏本体的模组界面[b]没有[/b]调整顺序的功能(只有启用/禁用勾选),所以顺序必须由调序工具写入.推荐 [url=https://steamcommunity.com/sharedfiles/filedetails/?id=3747605109]Load Order Manager[/url]:装好后在模组界面点「加载顺序」,把 RegentFXFastBoot 移到 RegentFX [b]上面[/b],点「应用」,重启游戏生效.
 [*][b]另请确认本 mod 只装了一份.[/b]本地副本与工坊副本同时存在时,引擎会在列表尾部写回第二行同名记录;排序只按 id 取[b]最后一行[/b]的位置,那一行会覆盖启用行的位置,导致每次启动都晚序.
 [*]未安装 RegentFX 时本 mod 保持待命,不做任何事
 [*][b]加速成功时的弹窗[/b]:若本次启动确实被加速(全部场景提交完成、至少预热了一个、无失败),进入主菜单后会弹一次提示窗,告知预热了多少个场景以及启动卡顿已消失;只有一个“知道了”按钮,无需任何操作。部分完成或有失败时不会弹此窗,避免夸大实际效果。
-[*][b]加速失败时的弹窗[/b]:若本次启动无法加速(RegentFX 先加载,同步预加载已经发生且无法撤回),进入主菜单后会弹一次提示窗,说明上面这四步,并提供两个按钮:[b]使生效[/b](打开 Load Order Manager 的工坊页面并显示步骤)与[b]不再提示[/b](记住选择,之后不再弹)。弹窗不写任何设置,不重排任何 mod;选"不再提示"后加速功能保持待命,之后若顺序修好仍会自动生效。
+[*][b]加速失败时的弹窗[/b]:若本次启动无法加速(RegentFX 先加载,同步预加载已经发生且无法撤回),进入主菜单后会弹一次提示窗,说明上面这四步,并提供两个按钮:[b]使生效[/b](打开 Load Order Manager 的工坊页面并显示步骤)与[b]不再提示[/b](记住选择,之后不再弹)。弹窗不写任何设置,不重排任何 mod;选「不再提示」后加速功能保持待命,之后若顺序修好仍会自动生效。
 [/list]
 
 [hr]
