@@ -132,8 +132,8 @@ namespace RegentFXFastBoot.RegentFXFastBootCode;
 ///  - Warmer node (this class instance, named RegentFXFastBootWarmer): producer =
 ///    LoadScenesPrefix; owner = the live NGame (deferred add_child); first consumer = its
 ///    own _Process draining the queue; cleanup = QueueFree on Completed, or freed with
-///    NGame at teardown. Exactly one node is ever created per launch (only on the
-///    Queued transition with a non-empty queue).
+///    NGame at teardown. Exactly one warmer node is created for an intercepted launch; a
+///    bounded collector that produces zero work releases it.
 ///  - Late-order notice watcher (RFX-3, LateOrderNoticeWatcher, named
 ///    RegentFXFastBoot_NoticeWatcher): producer = Initialize's definitive-late branch only;
 ///    owner = this mod, attached to the SceneTree root (deferred) so no NGame lifecycle can
@@ -217,7 +217,7 @@ public partial class MainFile : Node
     // are not established yet.
     private static object? _modSceneCache;   // runtime ConcurrentDictionary<string, PackedScene>
     private static MethodInfo? _cacheTryAdd; // bool TryAdd(string, PackedScene) on the cache
-    private static MethodInfo? _collector;   // static List<string> CollectAssetPathsSafely()
+    private static MethodInfo? _collector;   // static IEnumerable<string> CollectAssetPathsSafely()
 
     private static readonly List<string> Pending = new(MaxWarmUpPaths);
     private static readonly List<string> FailedPaths = new(MaxWarmUpPaths);
@@ -418,9 +418,11 @@ public partial class MainFile : Node
     /// <summary>
     /// Prefix on RegentFX.Scripts.Entry.LoadScenes. Producer: Entry.Init (the only call
     /// site); owner: this mod; first consumer: this method; cleanup: none (state machine).
-    /// Returns false (suppress the original) ONLY after every warm-up prerequisite resolved
-    /// and the queue was filled. Any prerequisite failure returns true so the ORIGINAL
-    /// preload runs (RFX-1 requirement 5). Never throws into RegentFX's initializer.
+    /// Returns false (suppress the original) only after every warm-up prerequisite resolved and
+    /// a warmer attachment was submitted. Collector enumeration then happens in bounded batches;
+    /// collector failures retain RegentFX's lazy first-consumer fallback. Any prerequisite or
+    /// attachment failure returns true so the ORIGINAL preload runs (RFX-1 requirement 5).
+    /// Never throws into RegentFX's initializer.
     /// </summary>
     private static bool LoadScenesPrefix()
     {

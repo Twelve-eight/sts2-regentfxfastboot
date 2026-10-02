@@ -119,7 +119,7 @@ internal sealed partial class ModNotice : Control, IScreenContext
             notice.BuildUi();
             container.Add(notice);
             // Read back instead of assuming: success means the container actually adopted it.
-            adopted = ReferenceEquals(container.OpenModal, notice);
+            adopted = IsAdopted(container, notice);
             if (!adopted)
             {
                 MainFile.Log.Warn($"{PrefixFor(kind)}: the engine modal container did not adopt the notice node; not shown");
@@ -154,8 +154,7 @@ internal sealed partial class ModNotice : Control, IScreenContext
             {
                 try
                 {
-                    adopted = container != null && GodotObject.IsInstanceValid(container) &&
-                        ReferenceEquals(container.OpenModal, notice);
+                    adopted = IsAdopted(container, notice);
                 }
                 catch
                 {
@@ -178,16 +177,55 @@ internal sealed partial class ModNotice : Control, IScreenContext
             // adopts this node. Never leave that detached subtree behind on an exception or
             // rejected-add path. If the container owns it, the container remains responsible.
             if (!adopted && notice != null && GodotObject.IsInstanceValid(notice))
+                ReleaseUnadoptedNotice(container, notice);
+        }
+    }
+
+    private static bool IsAdopted(NModalContainer? container, ModNotice notice)
+    {
+        try
+        {
+            return container != null
+                && GodotObject.IsInstanceValid(container)
+                && GodotObject.IsInstanceValid(notice)
+                && ReferenceEquals(container.OpenModal, notice)
+                && ReferenceEquals(notice.GetParent(), container)
+                && notice.IsInsideTree();
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static void ReleaseUnadoptedNotice(NModalContainer? container, ModNotice notice)
+    {
+        try
+        {
+            // Add() records OpenModal before AddChildSafely(). If adoption failed at any
+            // later step, clear only our own slot; never clear a modal that replaced this notice.
+            if (container != null
+                && GodotObject.IsInstanceValid(container)
+                && GodotObject.IsInstanceValid(notice)
+                && ReferenceEquals(container.OpenModal, notice))
             {
-                try
-                {
-                    notice.QueueFree();
-                }
-                catch
-                {
-                    // The game must remain unaffected even if the detached node is already dying.
-                }
+                container.Clear();
             }
+        }
+        catch
+        {
+            // The detached node is still released below; a stale engine slot is reported by
+            // the next bounded watcher attempt rather than allowed to affect the game.
+        }
+
+        try
+        {
+            if (GodotObject.IsInstanceValid(notice))
+                notice.QueueFree();
+        }
+        catch
+        {
+            // The game must remain unaffected even if the detached node is already dying.
         }
     }
 
