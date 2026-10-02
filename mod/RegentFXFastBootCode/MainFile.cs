@@ -381,12 +381,21 @@ public partial class MainFile : Node
             return; // already bound or terminal; never double-patch
         try
         {
-            MethodInfo? loadScenes = AccessTools.Method(entryType, LoadScenesName);
-            if (loadScenes == null)
+            // Bind the exact current contract: private/public static void LoadScenes().
+            // A name-only lookup can silently select a future overload or a changed return
+            // type, which would make the prefix signature mismatch or suppress the wrong
+            // method. Treat every shape change as unsupported and leave native preload on.
+            MethodInfo? loadScenes = entryType.GetMethod(
+                LoadScenesName,
+                BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly,
+                binder: null,
+                types: Type.EmptyTypes,
+                modifiers: null);
+            if (loadScenes == null || !loadScenes.IsStatic || loadScenes.ReturnType != typeof(void))
             {
                 CommitUnsupported(
-                    $"RegentFX found but {EntryTypeName}.{LoadScenesName} is missing (RegentFX version changed?). " +
-                    "No suppression, no warm-up, native behavior untouched.");
+                    $"RegentFX found but {EntryTypeName}.{LoadScenesName} does not match the expected static parameterless void signature " +
+                    "(RegentFX version changed?). No suppression, no warm-up, native behavior untouched.");
                 return;
             }
 
@@ -875,93 +884,132 @@ public partial class MainFile : Node
 
     public override void _Process(double delta)
     {
-        // Producer: Godot main loop; owner: the live NGame (parent); first consumer: this
-        // method; cleanup: QueueFree on completion, or freed with NGame at teardown.
+        try
+        {
+            // Producer: Godot main loop; owner: the live NGame (parent); first consumer: this
+            // method; cleanup: QueueFree on completion, or freed with NGame at teardown.
+            if (_phase == BindPhase.Completed)
+            {
+                QueueFree();
+                return;
+            }
+            if (_phase != BindPhase.Attached)
+                return;
+
+            if (!_collectionCompleted)
+            {
+                ProcessCollectorBatch();
+                if (!_collectionCompleted || _phase != BindPhase.Attached)
+                    return;
+            }
+
+            // At most ONE optional request is ever outstanding. While one is in flight nothing
+            // else is submitted: the engine serializes sessions, and a second enqueue would put
+            // optional work in front of the engine's own required loading.
+            if (_requestActive)
+            {
+                ObserveActiveRequest();
+                return;
+            }
+
+            // Queue-drained is checked before the retire gate: if everything was already
+            // submitted, "drained" is the accurate terminal reason even when the loader was
+            // retired afterwards.
+            if (Pending.Count == 0)
+            {
+                CompleteWarmUp("the queue drained");
+                return;
+            }
+
+            // Terminal retire gate: once the loader is unusable, optional work is over. Checked
+            // here so a retire decision always reaches CompleteWarmUp exactly once, whatever
+            // triggered it.
+            if (_loaderRetired)
+            {
+                CompleteWarmUp(_retireReason ?? "no live NAssetLoader was reachable");
+                return;
+            }
+
+            // Owner check. The warmer is a child of the NGame it was attached to, so a live
+            // owner is normally guaranteed; this covers teardown races.
+            MegaCrit.Sts2.Core.Nodes.NGame? nGame = MegaCrit.Sts2.Core.Nodes.NGame.Instance;
+            if (nGame == null || !GodotObject.IsInstanceValid(nGame))
+            {
+                CompleteWarmUp("the owning NGame is gone");
+                return;
+            }
+
+            if (!_loaderResolved)
+            {
+                // Resolve on one frame, submit on the next: one action per frame, no burst.
+                TryResolveLoader(nGame);
+                return;
+            }
+
+            // Menu idle is the submission window. The prefix runs during NGame startup, long
+            // before LaunchMainMenu makes the menu the current scene, so "not yet seen" is a
+            // wait state and "seen, then gone" is the stop condition. Leaving the menu ends
+            // optional work; an already-submitted request is still observed to completion by
+            // the branch above.
+            if (nGame.MainMenu == null)
+            {
+                if (_menuSeen)
+                {
+                    CompleteWarmUp("the main menu is no longer the current scene");
+                    return;
+                }
+                if (++_menuWaitFrames > MenuWaitFrameLimit)
+                {
+                    _loaderRetired = true;
+                    _retireReason = $"the main menu never became the current scene within {MenuWaitFrameLimit} frames";
+                    return;
+                }
+                return; // still booting; the menu has not appeared yet
+            }
+            if (!_menuSeen)
+            {
+                _menuSeen = true;
+                Log.Info($"MENU IDLE: the main menu is the current scene; optional warm-up starts. queue={Pending.Count}");
+            }
+
+            SubmitNextOptionalRequest();
+        }
+        catch (System.Exception e)
+        {
+            HandleUnexpectedProcessFailure(e);
+        }
+    }
+
+    private void HandleUnexpectedProcessFailure(System.Exception error)
+    {
         if (_phase == BindPhase.Completed)
-        {
-            QueueFree();
-            return;
-        }
-        if (_phase != BindPhase.Attached)
             return;
 
-        if (!_collectionCompleted)
-        {
-            ProcessCollectorBatch();
-            if (!_collectionCompleted || _phase != BindPhase.Attached)
-                return;
-        }
+        string detail = LimitFailureText($"{error.GetType().Name}: {error.Message}");
+        if (_activePath != null)
+            FailedPaths.Add(_activePath);
+        ClearActiveRequest();
+        _collectionFailureReason ??= $"unexpected warmer frame error: {detail}";
+        Log.Warn(
+            $"WARMER frame failed: {detail}. Optional warm-up is stopping; RegentFX's lazy first-consumer path remains the fallback.");
 
-        // At most ONE optional request is ever outstanding. While one is in flight nothing
-        // else is submitted: the engine serializes sessions, and a second enqueue would put
-        // optional work in front of the engine's own required loading.
-        if (_requestActive)
+        try
         {
-            ObserveActiveRequest();
-            return;
+            CompleteWarmUp("unexpected warmer frame failure");
         }
-
-        // Queue-drained is checked before the retire gate: if everything was already
-        // submitted, "drained" is the accurate terminal reason even when the loader was
-        // retired afterwards.
-        if (Pending.Count == 0)
+        catch (System.Exception cleanupError)
         {
-            CompleteWarmUp("the queue drained");
-            return;
-        }
-
-        // Terminal retire gate: once the loader is unusable, optional work is over. Checked
-        // here so a retire decision always reaches CompleteWarmUp exactly once, whatever
-        // triggered it.
-        if (_loaderRetired)
-        {
-            CompleteWarmUp(_retireReason ?? "no live NAssetLoader was reachable");
-            return;
-        }
-
-        // Owner check. The warmer is a child of the NGame it was attached to, so a live
-        // owner is normally guaranteed; this covers teardown races.
-        MegaCrit.Sts2.Core.Nodes.NGame? nGame = MegaCrit.Sts2.Core.Nodes.NGame.Instance;
-        if (nGame == null || !GodotObject.IsInstanceValid(nGame))
-        {
-            CompleteWarmUp("the owning NGame is gone");
-            return;
-        }
-
-        if (!_loaderResolved)
-        {
-            // Resolve on one frame, submit on the next: one action per frame, no burst.
-            TryResolveLoader(nGame);
-            return;
-        }
-
-        // Menu idle is the submission window. The prefix runs during NGame startup, long
-        // before LaunchMainMenu makes the menu the current scene, so "not yet seen" is a
-        // wait state and "seen, then gone" is the stop condition. Leaving the menu ends
-        // optional work; an already-submitted request is still observed to completion by
-        // the branch above.
-        if (nGame.MainMenu == null)
-        {
-            if (_menuSeen)
+            _phase = BindPhase.Completed;
+            Log.Warn($"WARMER failure cleanup was incomplete: {cleanupError.Message}");
+            try
             {
-                CompleteWarmUp("the main menu is no longer the current scene");
-                return;
+                QueueFree();
             }
-            if (++_menuWaitFrames > MenuWaitFrameLimit)
+            catch
             {
-                _loaderRetired = true;
-                _retireReason = $"the main menu never became the current scene within {MenuWaitFrameLimit} frames";
-                return;
+                // The owner will release the node during teardown if QueueFree also fails.
             }
-            return; // still booting; the menu has not appeared yet
         }
-        if (!_menuSeen)
-        {
-            _menuSeen = true;
-            Log.Info($"MENU IDLE: the main menu is the current scene; optional warm-up starts. queue={Pending.Count}");
-        }
-
-        SubmitNextOptionalRequest();
     }
 
     /// <summary>
