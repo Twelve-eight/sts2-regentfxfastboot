@@ -75,6 +75,8 @@ internal sealed partial class ModNoticeWatcher : Node
     /// </summary>
     internal static void Schedule(NoticeKind kind, int warmed = 0)
     {
+        ModNoticeWatcher? watcher = null;
+        bool deferredAttachSubmitted = false;
         try
         {
             if (NoticeState.IsShown(kind))
@@ -84,13 +86,13 @@ internal sealed partial class ModNoticeWatcher : Node
             }
 
             var mainLoop = Engine.GetMainLoop() as SceneTree;
-            if (mainLoop?.Root == null)
+            if (mainLoop?.Root == null || !GodotObject.IsInstanceValid(mainLoop.Root))
             {
                 MainFile.Log.Warn($"{PrefixFor(kind)}: no SceneTree root available; the popup is not scheduled this launch");
                 return;
             }
 
-            var watcher = new ModNoticeWatcher
+            watcher = new ModNoticeWatcher
             {
                 Name = WatcherNodeName,
                 _kind = kind,
@@ -101,13 +103,31 @@ internal sealed partial class ModNoticeWatcher : Node
             // mod initializer inside NGame's _EnterTree, so the tree is mid-traversal and a
             // direct AddChild is not safe.
             mainLoop.Root.CallDeferred("add_child", watcher);
+            deferredAttachSubmitted = true;
             MainFile.Log.Info(
                 $"{PrefixFor(kind)}: popup scheduled; it will appear once the main menu is up (this launch only)");
         }
         catch (Exception e)
         {
+            if (!deferredAttachSubmitted && watcher != null && GodotObject.IsInstanceValid(watcher))
+            {
+                try
+                {
+                    watcher.QueueFree();
+                }
+                catch
+                {
+                    // Scheduling is a convenience; a cleanup failure must not affect the game.
+                }
+            }
             MainFile.Log.Warn($"{PrefixFor(kind)}: scheduling the popup failed ({e.GetType().Name}: {e.Message}); the game is unaffected");
         }
+    }
+
+    public override void _ExitTree()
+    {
+        _warmed = 0;
+        base._ExitTree();
     }
 
     public override void _Process(double delta)

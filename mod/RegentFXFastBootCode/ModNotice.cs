@@ -95,9 +95,12 @@ internal sealed partial class ModNotice : Control, IScreenContext
     /// </summary>
     internal static bool TryShow(NoticeKind kind, int warmed = 0)
     {
+        NModalContainer? container = null;
+        ModNotice? notice = null;
+        bool adopted = false;
         try
         {
-            NModalContainer? container = NModalContainer.Instance;
+            container = NModalContainer.Instance;
             if (container == null || !GodotObject.IsInstanceValid(container))
             {
                 MainFile.Log.Info($"{PrefixFor(kind)}: the engine modal container is not available yet; the notice was not shown");
@@ -112,15 +115,14 @@ internal sealed partial class ModNotice : Control, IScreenContext
                 return false;
             }
 
-            var notice = new ModNotice { Name = NoticeNodeName, _kind = kind, _warmed = warmed };
+            notice = new ModNotice { Name = NoticeNodeName, _kind = kind, _warmed = warmed };
             notice.BuildUi();
             container.Add(notice);
             // Read back instead of assuming: success means the container actually adopted it.
-            if (!ReferenceEquals(container.OpenModal, notice))
+            adopted = ReferenceEquals(container.OpenModal, notice);
+            if (!adopted)
             {
                 MainFile.Log.Warn($"{PrefixFor(kind)}: the engine modal container did not adopt the notice node; not shown");
-                if (GodotObject.IsInstanceValid(notice))
-                    notice.QueueFree();
                 return false;
             }
             MainFile.Log.Info(kind == NoticeKind.LateOrder
@@ -145,8 +147,47 @@ internal sealed partial class ModNotice : Control, IScreenContext
         }
         catch (Exception e)
         {
+            // Add() or a later bookkeeping call may throw after the engine has already adopted
+            // the node. Re-check ownership before cleanup: an adopted modal must stay visible
+            // and the watcher must not retry a second copy into the same slot.
+            if (!adopted && notice != null && GodotObject.IsInstanceValid(notice))
+            {
+                try
+                {
+                    adopted = container != null && GodotObject.IsInstanceValid(container) &&
+                        ReferenceEquals(container.OpenModal, notice);
+                }
+                catch
+                {
+                    adopted = false;
+                }
+            }
+            if (adopted)
+            {
+                MainFile.Log.Warn(
+                    $"{PrefixFor(kind)}: the notice node was adopted before an error ({e.GetType().Name}: {e.Message}); " +
+                    "keeping the visible notice and not retrying it this launch");
+                return true;
+            }
             MainFile.Log.Warn($"{PrefixFor(kind)}: could not show the notice ({e.GetType().Name}: {e.Message}); the game is unaffected");
             return false;
+        }
+        finally
+        {
+            // BuildUi or Add can fail after allocating children but before the modal container
+            // adopts this node. Never leave that detached subtree behind on an exception or
+            // rejected-add path. If the container owns it, the container remains responsible.
+            if (!adopted && notice != null && GodotObject.IsInstanceValid(notice))
+            {
+                try
+                {
+                    notice.QueueFree();
+                }
+                catch
+                {
+                    // The game must remain unaffected even if the detached node is already dying.
+                }
+            }
         }
     }
 
@@ -405,6 +446,14 @@ internal sealed partial class ModNotice : Control, IScreenContext
                 // nothing further can be done; the node dies with the container
             }
         }
+    }
+
+    public override void _ExitTree()
+    {
+        _dismissed = true;
+        _stepsLabel = null;
+        DefaultFocusedControl = null;
+        base._ExitTree();
     }
 
     public override void _Input(InputEvent @event)

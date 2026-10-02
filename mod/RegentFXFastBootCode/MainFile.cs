@@ -80,9 +80,9 @@ namespace RegentFXFastBoot.RegentFXFastBootCode;
 ///   Armed   -> Bound       RegentFX assembly appeared; LoadScenes binding installed;
 ///                          AssemblyLoad handler unsubscribed (terminal binding outcome).
 ///   Bound   -> Intercepted LoadScenes prefix actually entered (PCK + script + config done).
-///   Intercepted -> Queued  typed ModSceneCache + validated collector resolved; paths
-///                          queued; original preload suppressed (only when ALL
-///                          prerequisites resolved; otherwise it is left enabled).
+///   Intercepted -> Queued  typed ModSceneCache + validated collector resolved; bounded
+///                          collection scheduled; original preload suppressed only after a
+///                          warmer attachment is accepted, with lazy fallback on later failure.
 ///   Queued  -> Attached    warmer node actually entered the live NGame's tree.
 ///   Attached -> Completed  optional work ended: the queue drained, or the launch stopped
 ///                          submitting (left the main menu, owner gone). Per-path outcomes
@@ -125,10 +125,10 @@ namespace RegentFXFastBoot.RegentFXFastBootCode;
 ///    time; owner = this mod; first consumer = RegentFX.Entry.Init calling LoadScenes;
 ///    cleanup = none (single patch for the process lifetime, idempotent install, harmless
 ///    if it never fires; unpatching would not restore anything that matters).
-///  - SceneTree.ProcessFrame retry handler (only when NGame.Instance is unexpectedly null
-///    at prefix time): producer = engine main loop; owner = this mod; first consumer =
-///    RetryAttachOnProcessFrame; cleanup = unsubscribed on attach submission or after a
-///    bounded 900-frame give-up (then reported Failed). Never subscribed twice.
+///  - Warmer attachment: producer = the LoadScenes prefix; owner = the live NGame; first
+///    consumer = the deferred add_child operation; cleanup = abort and restore the original
+///    preload on attachment failure. If no live NGame exists at interception time, the prefix
+///    fails open instead of suppressing the native preload while waiting for a later node.
 ///  - Warmer node (this class instance, named RegentFXFastBootWarmer): producer =
 ///    LoadScenesPrefix; owner = the live NGame (deferred add_child); first consumer = its
 ///    own _Process draining the queue; cleanup = QueueFree on Completed, or freed with
@@ -163,14 +163,17 @@ public partial class MainFile : Node
     private const string CacheFieldName = "ModSceneCache";
     private const string CollectorName = "CollectAssetPathsSafely";
     private const string WarmerNodeName = "RegentFXFastBootWarmer";
-    private const int AttachRetryFrameLimit = 900;
-
-    // RFX-2 bounds. Frame-counted, matching the existing AttachRetryFrameLimit convention.
-    // Both bound only the WAIT for a condition to become reachable. An accepted request is
-    // never timed out: Godot exposes no cancellation for it, so it is observed to completion.
+    // RFX-2 bounds. These bound only the wait for conditions that are observable from the
+    // attached warmer node. Accepted asset requests are never timed out: Godot exposes no
+    // cancellation for them, so they are observed to completion.
     private const int LoaderResolveFrameLimit = 600; // ~10s at 60fps: live loader never appeared
     private const int MenuWaitFrameLimit = 3600;     // ~60s at 60fps: menu never became current
     private const int LoaderSearchNodeBudget = 512;  // max nodes visited per resolve attempt
+    private const int CollectorBatchSize = 8;       // collector items consumed per warmer frame
+    private const int MaxWarmUpPaths = 128;         // bounded queue; above the known 32-path contract
+    private const int MaxCollectorItems = 256;      // bounded collector inspection, plus one lookahead
+    private const int MaxAssetPathLength = 512;     // reject malformed or hostile cache keys
+    private const int MaxFailureLogChars = 2048;    // keep failure diagnostics bounded
     private const string SessionNamePrefix = "RegentFXFastBoot optional";
 
     /// <summary>Spine of the warm-up lifecycle; every value is committed after success.</summary>
@@ -216,8 +219,9 @@ public partial class MainFile : Node
     private static MethodInfo? _cacheTryAdd; // bool TryAdd(string, PackedScene) on the cache
     private static MethodInfo? _collector;   // static List<string> CollectAssetPathsSafely()
 
-    private static readonly List<string> Pending = new();
-    private static readonly List<string> FailedPaths = new();
+    private static readonly List<string> Pending = new(MaxWarmUpPaths);
+    private static readonly List<string> FailedPaths = new(MaxWarmUpPaths);
+    private static IEnumerable<string>? _pendingCollectorOutput;
     private static int _warmed;
     private static int _alreadyCached;
 
@@ -235,9 +239,15 @@ public partial class MainFile : Node
     private string? _activePath;
     private ConcurrentDictionary<string, Resource>? _scratchCache; // bounded to the one in-flight path
 
-    // Bounded NGame.Instance retry state (see class doc, ProcessFrame entry).
-    private static SceneTree? _retryTree;
-    private static int _retryFrames;
+    // Collector state is owned by the warmer node. It is consumed in bounded batches so a lazy,
+    // duplicate-heavy, or non-terminating future collector cannot monopolize the interception frame.
+    private IEnumerable<string>? _collectorOutput;
+    private IEnumerator<string>? _collectorEnumerator;
+    private HashSet<string>? _seenPaths;
+    private int _collectorItemsInspected;
+    private bool _collectionCompleted;
+    private string? _collectionFailureReason;
+
     private static bool _attachSubmitted;
 
     public static void Initialize()
@@ -463,49 +473,209 @@ public partial class MainFile : Node
                 return true;
             }
 
-            // Queue the same path list the original preload would have built. The cache is
-            // expected to be empty here (the prefix runs before the original body); paths
-            // already present are counted, not re-queued.
-            var dict = (System.Collections.IDictionary)_modSceneCache!;
-            int queuedNow = 0;
-            int presentAlready = 0;
-            foreach (string path in paths)
-            {
-                if (string.IsNullOrEmpty(path))
-                    continue;
-                if (dict.Contains(path))
-                {
-                    presentAlready++;
-                    continue;
-                }
-                Pending.Add(path);
-                queuedNow++;
-            }
-
+            // Do not enumerate the collector on the interception stack. The returned sequence
+            // is transferred to the warmer and consumed in bounded frame batches after the
+            // original synchronous preload has been suppressed. Any later collector failure is
+            // reported honestly and falls back to RegentFX's normal lazy first-consumer path.
+            Pending.Clear();
+            FailedPaths.Clear();
+            _warmed = 0;
+            _alreadyCached = 0;
+            _pendingCollectorOutput = paths;
             _phase = BindPhase.Queued;
-            if (queuedNow == 0)
+
+            if (!TryAttachWarmer())
             {
-                // The original LoadScenes no-ops on an empty list (decompile: early return
-                // when list.Count <= 0), so suppression is exactly equivalent.
-                _phase = BindPhase.Completed;
-                Log.Info(
-                    $"COMPLETED (zero work): queued 0 new paths ({presentAlready} already cached). " +
-                    "Original preload suppressed; it would have been a no-op. No warmer node created.");
-                return false;
+                AbortPendingWarmUp();
+                return true;
             }
 
-            Log.Info($"QUEUED: {queuedNow} scene paths for one-per-frame idle warm-up; original preload suppressed.");
-            TryAttachWarmer();
+            Log.Info(
+                $"COLLECTING: bounded collector batches scheduled (batch={CollectorBatchSize}, " +
+                $"maxItems={MaxCollectorItems}, maxPaths={MaxWarmUpPaths}); original preload suppressed.");
             return false;
         }
         catch (Exception e)
         {
             // Never break RegentFX's initializer: fall back to the original preload.
-            CommitFailed($"LoadScenes prefix error, original preload LEFT ENABLED: {e}");
+            CommitFailed($"LoadScenes prefix error, original preload LEFT ENABLED: {LimitFailureText(e.ToString())}");
+            AbortPendingWarmUp();
             return true;
         }
     }
 
+    /// <summary>
+    /// Consumes a bounded collector batch on the warmer node. The collector is deliberately not
+    /// fully materialized in LoadScenesPrefix: one frame can inspect only CollectorBatchSize
+    /// items, the full sequence can inspect at most MaxCollectorItems plus one lookahead, and
+    /// Pending can hold at most MaxWarmUpPaths unique uncached paths.
+    /// </summary>
+    private void ProcessCollectorBatch()
+    {
+        if (_collectionCompleted)
+            return;
+
+        try
+        {
+            if (_collectorEnumerator == null)
+            {
+                if (_collectorOutput == null)
+                {
+                    FailCollector("collector output was lost before attachment");
+                    return;
+                }
+                _collectorEnumerator = _collectorOutput.GetEnumerator();
+                _seenPaths = new HashSet<string>(StringComparer.Ordinal);
+            }
+
+            System.Collections.IDictionary cache = (System.Collections.IDictionary)_modSceneCache!;
+            int processedThisFrame = 0;
+            while (processedThisFrame < CollectorBatchSize)
+            {
+                if (_collectorItemsInspected >= MaxCollectorItems)
+                {
+                    // One lookahead is allowed only to distinguish an exact-size finite
+                    // collector from an oversized or non-terminating one.
+                    if (_collectorEnumerator.MoveNext())
+                    {
+                        _collectorItemsInspected++;
+                        FailCollector($"collector exceeded the {MaxCollectorItems}-item inspection bound");
+                    }
+                    else
+                    {
+                        FinishCollector();
+                    }
+                    return;
+                }
+
+                if (!_collectorEnumerator.MoveNext())
+                {
+                    FinishCollector();
+                    return;
+                }
+
+                _collectorItemsInspected++;
+                processedThisFrame++;
+                string? path = _collectorEnumerator.Current;
+                if (!IsSafeScenePath(path))
+                {
+                    FailCollector("collector returned an invalid scene path");
+                    return;
+                }
+                if (!_seenPaths!.Add(path!))
+                    continue;
+                if (cache.Contains(path!))
+                {
+                    _alreadyCached++;
+                    continue;
+                }
+                if (Pending.Count >= MaxWarmUpPaths)
+                {
+                    FailCollector($"collector exceeded the {MaxWarmUpPaths}-path warm-up bound");
+                    return;
+                }
+                Pending.Add(path!);
+            }
+
+            if (_collectorItemsInspected >= MaxCollectorItems)
+            {
+                if (_collectorEnumerator.MoveNext())
+                {
+                    _collectorItemsInspected++;
+                    FailCollector($"collector exceeded the {MaxCollectorItems}-item inspection bound");
+                }
+                else
+                {
+                    FinishCollector();
+                }
+            }
+        }
+        catch (Exception e)
+        {
+            FailCollector($"collector enumeration failed: {e.GetType().Name}: {LimitFailureText(e.Message)}");
+        }
+    }
+
+    private void FinishCollector()
+    {
+        if (_collectionCompleted)
+            return;
+        _collectionCompleted = true;
+        DisposeCollector();
+
+        if (Pending.Count == 0)
+        {
+            _phase = BindPhase.Completed;
+            Log.Info(
+                $"COMPLETED (zero work): queued 0 new paths ({_alreadyCached} already cached). " +
+                "Original preload suppressed; the bounded collector produced no new paths. Warmer node released.");
+            ClearWarmUpState();
+            QueueFree();
+            return;
+        }
+
+        Log.Info($"QUEUED: {Pending.Count} scene paths for one-per-frame idle warm-up; original preload suppressed.");
+    }
+
+    private void FailCollector(string detail)
+    {
+        if (_collectionCompleted)
+            return;
+        _collectionFailureReason = LimitFailureText(detail);
+        _collectionCompleted = true;
+        DisposeCollector();
+        CommitFailed(
+            $"collector output rejected after suppression: {_collectionFailureReason}. " +
+            "RegentFX's lazy first-consumer path remains the fallback.");
+        CompleteWarmUp("collector output rejected");
+    }
+
+    private void DisposeCollector()
+    {
+        IEnumerator<string>? enumerator = _collectorEnumerator;
+        _collectorEnumerator = null;
+        _collectorOutput = null;
+        _seenPaths = null;
+        if (enumerator == null)
+            return;
+        try
+        {
+            enumerator.Dispose();
+        }
+        catch (Exception e)
+        {
+            Log.Warn($"Collector enumerator disposal failed: {e.GetType().Name}: {LimitFailureText(e.Message)}");
+        }
+    }
+
+    private static bool IsSafeScenePath(string? path)
+    {
+        if (string.IsNullOrEmpty(path)
+            || path.Length > MaxAssetPathLength
+            || !path.Equals(path.Trim(), StringComparison.Ordinal)
+            || !path.StartsWith("res://", StringComparison.Ordinal)
+            || path.Contains('\\')
+            || path.Contains('\0'))
+        {
+            return false;
+        }
+
+        string relative = path.Substring("res://".Length);
+        if (relative.Length == 0
+            || relative.StartsWith("/", StringComparison.Ordinal)
+            || relative.EndsWith("/", StringComparison.Ordinal)
+            || !relative.EndsWith(".tscn", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        foreach (string segment in relative.Split('/'))
+        {
+            if (segment.Length == 0 || segment == "." || segment == "..")
+                return false;
+        }
+        return true;
+    }
     /// <summary>
     /// Resolves and validates, once: the ModSceneCache instance (runtime type must be
     /// ConcurrentDictionary of string -> PackedScene, per the RegentEntry decompile), its
@@ -591,74 +761,78 @@ public partial class MainFile : Node
         if (_attachSubmitted)
             return true;
         MegaCrit.Sts2.Core.Nodes.NGame? nGame = MegaCrit.Sts2.Core.Nodes.NGame.Instance;
-        if (nGame != null)
+        if (nGame != null && GodotObject.IsInstanceValid(nGame))
         {
             SubmitDeferredAttach(nGame);
             return true;
         }
 
-        // Unexpected (defensive): NGame.Instance not assigned at prefix time. Retry per
-        // frame on the main loop with a bounded give-up; the handler unsubscribes itself.
-        if (Engine.GetMainLoop() is SceneTree tree)
-        {
-            _retryTree = tree;
-            _retryFrames = 0;
-            tree.ProcessFrame += RetryAttachOnProcessFrame;
-            Log.Warn("NGame.Instance was null at interception time; retrying attachment once per frame (bounded)");
-            return true;
-        }
+        // If the live NGame is not available at the interception point, do not suppress
+        // RegentFX's native preload and hope a later frame can repair the decision. The
+        // original call is the only fail-closed fallback once this prefix returns.
         CommitFailed(
-            "attachment failed: no live NGame and no SceneTree main loop. FAILED warm-up: the queue never drains; " +
-            "RegentFX's lazy first-consumer path (VFXUtil.GenVFXNode -> PreloadManager.Cache.GetScene) serves all effects.");
+            "attachment failed: NGame.Instance was null at interception time; original preload LEFT ENABLED. " +
+            "RegentFX's native preload remains the fallback.");
         return false;
     }
 
     private static void SubmitDeferredAttach(MegaCrit.Sts2.Core.Nodes.NGame nGame)
     {
-        var warmer = new MainFile();
-        warmer.Name = WarmerNodeName;
-        nGame.CallDeferred("add_child", warmer);
-        _attachSubmitted = true;
-        Log.Info(
-            $"ATTACH submitted: warmer node handed to the LIVE NGame via deferred add_child; queue={Pending.Count}. " +
-            "ATTACHED is committed only when the node actually enters the tree.");
-    }
-
-    private static void RetryAttachOnProcessFrame()
-    {
+        MainFile? warmer = null;
         try
         {
-            _retryFrames++;
-            MegaCrit.Sts2.Core.Nodes.NGame? nGame = MegaCrit.Sts2.Core.Nodes.NGame.Instance;
-            if (nGame != null)
+            warmer = new MainFile
             {
-                DetachRetryHandler();
-                SubmitDeferredAttach(nGame);
-                return;
-            }
-            if (_retryFrames >= AttachRetryFrameLimit)
-            {
-                DetachRetryHandler();
-                CommitFailed(
-                    $"attachment failed: NGame.Instance still null after {AttachRetryFrameLimit} frames. FAILED warm-up: the queue " +
-                    "never drains; RegentFX's lazy first-consumer path serves all effects.");
-            }
+                Name = WarmerNodeName,
+                _collectorOutput = _pendingCollectorOutput
+            };
+            _pendingCollectorOutput = null;
+            nGame.CallDeferred("add_child", warmer);
+            _attachSubmitted = true;
+            Log.Info(
+                "ATTACH submitted: warmer node handed to the LIVE NGame via deferred add_child; " +
+                $"collector queue pending (maxPaths={MaxWarmUpPaths}). ATTACHED is committed only when " +
+                "the node actually enters the tree.");
         }
-        catch (Exception e)
+        catch
         {
-            DetachRetryHandler();
-            CommitFailed($"attachment retry error: {e}");
+            if (warmer != null)
+            {
+                _pendingCollectorOutput ??= warmer._collectorOutput;
+                warmer._collectorOutput = null;
+                try
+                {
+                    if (GodotObject.IsInstanceValid(warmer) && !warmer.IsInsideTree())
+                        warmer.QueueFree();
+                }
+                catch
+                {
+                    // The attachment failure is handled by the caller; no further cleanup is safe here.
+                }
+            }
+            throw;
         }
     }
 
-    private static void DetachRetryHandler()
+    private static void AbortPendingWarmUp()
     {
-        SceneTree? tree = _retryTree;
-        if (tree != null)
+        if (_pendingCollectorOutput is IDisposable disposable)
         {
-            tree.ProcessFrame -= RetryAttachOnProcessFrame;
-            _retryTree = null;
+            try
+            {
+                disposable.Dispose();
+            }
+            catch
+            {
+                // The original preload is the fail-closed fallback; no further cleanup is safe here.
+            }
         }
+        _pendingCollectorOutput = null;
+        Pending.Clear();
+        FailedPaths.Clear();
+        _warmed = 0;
+        _alreadyCached = 0;
+        _phase = BindPhase.Intercepted;
     }
 
     // ----------------------- warmer node (instance members) -----------------------
@@ -672,8 +846,29 @@ public partial class MainFile : Node
         if (_phase == BindPhase.Queued)
         {
             _phase = BindPhase.Attached;
-            Log.Info($"ATTACHED: warmer node entered the live NGame's tree (parent '{GetParent()?.Name}'); queue={Pending.Count}");
+            Log.Info(
+                $"ATTACHED: warmer node entered the live NGame's tree (parent '{GetParent()?.Name}'); " +
+                $"collector batches will populate the bounded queue (maxPaths={MaxWarmUpPaths})");
         }
+    }
+
+    public override void _ExitTree()
+    {
+        bool unfinished = _phase == BindPhase.Queued || _phase == BindPhase.Attached;
+        DisposeCollector();
+        ClearActiveRequest();
+        _liveLoader = null;
+        if (unfinished && _phase != BindPhase.Completed)
+        {
+            int abandoned = Pending.Count;
+            Pending.Clear();
+            FailedPaths.Clear();
+            _phase = BindPhase.Completed;
+            Log.Warn(
+                $"WARMER node exited before completion; abandoned {abandoned} queued path(s). " +
+                "This is NOT a boot saving: RegentFX's lazy first-consumer path remains the fallback.");
+        }
+        base._ExitTree();
     }
 
     public override void _Process(double delta)
@@ -687,6 +882,13 @@ public partial class MainFile : Node
         }
         if (_phase != BindPhase.Attached)
             return;
+
+        if (!_collectionCompleted)
+        {
+            ProcessCollectorBatch();
+            if (!_collectionCompleted || _phase != BindPhase.Attached)
+                return;
+        }
 
         // At most ONE optional request is ever outstanding. While one is in flight nothing
         // else is submitted: the engine serializes sessions, and a second enqueue would put
@@ -872,7 +1074,7 @@ public partial class MainFile : Node
         catch (Exception e)
         {
             FailedPaths.Add(path);
-            Log.Warn($"Optional warm-up request could not be submitted for {path}: {e.Message}");
+            Log.Warn($"Optional warm-up request could not be submitted for {path}: {LimitFailureText(e.Message)}");
         }
     }
 
@@ -898,7 +1100,9 @@ public partial class MainFile : Node
         if (task.IsFaulted || task.IsCanceled)
         {
             FailedPaths.Add(path);
-            Log.Warn($"Optional warm-up request ended {task.Status} for {path}: {task.Exception?.GetBaseException().Message}");
+            Log.Warn(
+                $"Optional warm-up request ended {task.Status} for {path}: " +
+                LimitFailureText(task.Exception?.GetBaseException().Message ?? "no exception detail"));
             ClearActiveRequest();
             return;
         }
@@ -948,6 +1152,29 @@ public partial class MainFile : Node
         _scratchCache = null;
     }
 
+    private static string LimitFailureText(string text)
+    {
+        if (text.Length <= MaxFailureLogChars)
+            return text;
+        return text.Substring(0, MaxFailureLogChars) + "...";
+    }
+
+    private static string SummarizeFailedPaths()
+    {
+        string summary = string.Join(", ", FailedPaths);
+        return LimitFailureText(summary);
+    }
+
+    private void ClearWarmUpState()
+    {
+        DisposeCollector();
+        Pending.Clear();
+        FailedPaths.Clear();
+        _collectionFailureReason = null;
+        _warmed = 0;
+        _alreadyCached = 0;
+    }
+
     /// <summary>
     /// Ends optional work. Reports per-path outcomes, and reports an early stop as a stop -
     /// never as a boot saving, because the paths that were never submitted still fall back
@@ -956,13 +1183,15 @@ public partial class MainFile : Node
     private void CompleteWarmUp(string reason)
     {
         _phase = BindPhase.Completed;
+        int failedCount = FailedPaths.Count + (_collectionFailureReason == null ? 0 : 1);
+        int notSubmitted = Pending.Count;
         Log.Info(
-            $"COMPLETED ({reason}): warmed={_warmed}, alreadyCached={_alreadyCached}, failed={FailedPaths.Count}, " +
-            $"notSubmitted={Pending.Count}.");
-        if (Pending.Count > 0)
+            $"COMPLETED ({reason}): warmed={_warmed}, alreadyCached={_alreadyCached}, failed={failedCount}, " +
+            $"notSubmitted={notSubmitted}.");
+        if (notSubmitted > 0)
         {
             Log.Warn(
-                $"STOPPED with {Pending.Count} path(s) never submitted ({reason}). This is NOT a boot saving: those effects " +
+                $"STOPPED with {notSubmitted} path(s) never submitted ({reason}). This is NOT a boot saving: those effects " +
                 "fall back to RegentFX's lazy first-consumer path (VFXUtil.GenVFXNode -> PreloadManager.Cache.GetScene).");
         }
         if (FailedPaths.Count > 0)
@@ -971,9 +1200,15 @@ public partial class MainFile : Node
             // the lazy first-consumer path is preserved. Cache counts are never cited
             // as evidence of success - the per-path outcomes above are the evidence.
             Log.Warn(
-                $"FAILED warm-up for {FailedPaths.Count} path(s): {string.Join(", ", FailedPaths)}. Those effects were NOT " +
+                $"FAILED warm-up for {FailedPaths.Count} path(s): {SummarizeFailedPaths()}. Those effects were NOT " +
                 "pre-warmed; RegentFX's lazy first-consumer path (VFXUtil.GenVFXNode -> PreloadManager.Cache.GetScene) serves " +
                 "them at first use.");
+        }
+        if (_collectionFailureReason != null)
+        {
+            Log.Warn(
+                $"FAILED warm-up collector stage: {_collectionFailureReason}. RegentFX's lazy first-consumer path " +
+                "serves the effects at first use.");
         }
 
         // RFX-4 (2026-09-17): on genuine success the player is told, once. The acceleration
@@ -982,13 +1217,11 @@ public partial class MainFile : Node
         // submitted, at least one path was actually warmed, and none failed. A partial stop or
         // any failure stays silent here because the late-order notice's territory is the
         // failure path, and this notice must never claim a saving that did not happen.
-        // The zero-work early return above never reaches this method at all (no warmer node is
-        // created), so a launch where RegentFX's preload would have been a no-op is silent too.
-        if (_warmed > 0 && FailedPaths.Count == 0 && Pending.Count == 0)
-        {
+        bool success = _warmed > 0 && failedCount == 0 && notSubmitted == 0;
+        if (success)
             ModNoticeWatcher.Schedule(NoticeKind.Succeeded, _warmed);
-        }
 
+        ClearWarmUpState();
         QueueFree();
     }
 
