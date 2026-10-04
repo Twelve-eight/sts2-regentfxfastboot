@@ -844,3 +844,11 @@ consecutive frames)`)并 `QueueFree()`;未显示**不**写一次性状态,下次
 - 未验证: 59904 B 与 58880 B 两个版本之间的实际行为差异; 59904 B 版本的实机弹窗/离开菜单行为; 上段记录的 32 场景预热日志对应的是哪一份字节.
 - 处置建议 (需用户决策): 要么把 59904 B 载荷与本段一起提交并重新记录交付值, 要么回退工作树载荷到 58880 B. 在决定之前不要把任一份当作已验证交付.
 - 本段为 2026-09-30 只读复查记录, 不修改任何载荷.
+
+## 2026-10-05 Workshop发布暂存准备
+
+- 本轮仅推送前准备, 未上传Workshop, 未调用SteamCMD/读取凭据/消耗登录冷却, 未写Steam安装或共享mod_configs, 未操作游戏.
+- 统一refresh在2026-10-05 UTC+8刷新本仓RegentFXFastBoot暂存, 来源为canonical Release artifact和源码manifest. 本仓后续-Only RegentFXFastBoot -VerifyOnly exit0, 原始命令与输出G:/omp works/.tmp/workshop-prep-20261004-central/r4-real-final-verification-results.json.
+- 本仓来源通过不是全量可上传证明. 全量仅Spire1 REBUILD_REQUIRED, 因另一个Forms会话正在改其源码; 正式Spire1 wrapper GuardsOnly在全量provenance拒绝. -Only不豁免正式上传入口的全量检查.
+- 复制前备份r4-staging-backup.json, 最终本仓各文件hash在r4-final-seven-payloads.json. 原refresh的freshness在复制后核验, 失败不保证全部staging未写; 本次有效刷新不回填旧包.
+- 本轮无新增游戏运行验收. 只精确备份本仓发布暂存与本段日志, 保留已有dirty源码/路径清理/advice删除, 不git add -A. 中央接续入口G:/omp works/Sts/sts2-spire1/docs/CHECKPOINT-workshop-prep-20261005.md.
