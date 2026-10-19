@@ -1,5 +1,12 @@
 # IL-level comparison of the shipped build against the current one
 
+> **STALE: these dumps describe the 0.3.0 build, not the current source.**
+> `il-new.txt` contains `LateOrderNotice` / `LateOrderNoticeWatcher` (212 occurrences) and
+> **zero** `ModNotice` / `ModNoticeWatcher` / `NoticeKind` — the names in use since the 0.4.0
+> rename (`DEVLOG.md:617-620`, `:740`). The analysis below is valid for the 0.2.0 -> 0.3.0
+> comparison it was written for; do not cite it as evidence about the current build.
+> Flagged by `AuditStsSmall2`, 2026-10-19.
+
 Purpose: settle whether the staged payload differs from the previous shipped build
 beyond the intended changes, using evidence that does not depend on a decompiler's
 reference resolution.
