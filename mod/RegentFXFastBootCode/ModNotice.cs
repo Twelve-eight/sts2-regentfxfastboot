@@ -63,9 +63,36 @@ internal sealed partial class ModNotice : Control, IScreenContext
 
     private const string LoadOrderManagerUrl = "https://steamcommunity.com/sharedfiles/filedetails/?id=3747605109";
 
+    /// <summary>
+    /// Frames without a main menu after which this notice closes itself.
+    ///
+    /// Why it is needed at all: the notice lives in NModalContainer, which sits outside
+    /// NSceneContainer and is never cleared on a scene change. The engine's own Clear() call
+    /// sites are NVerticalPopup.Close (NVerticalPopup.cs:189), NModalContainer.Clear from an
+    /// FTUE (NFtue.cs:73), the credits screen (NCreditsScreen.cs:458), the early-access
+    /// disclaimer (NEarlyAccessDisclaimer.cs:104) and RunManager.CleanUp (RunManager.cs:1586,
+    /// i.e. run TEARDOWN). None of them runs on the main-menu -> run transition, so a notice
+    /// that is on screen when the main menu is replaced - the player starts a run during the
+    /// watcher's settle window, a save file is dropped on the window (FileDropHandler), a
+    /// dev-console action jumps scenes - survives into the next screen, where its scrim
+    /// swallows the mouse for the rest of the session. That is exactly the "a popup must never
+    /// become part of the game flow" invariant.
+    ///
+    /// Why 30 frames (~0.5s) and not the watcher's 3: the two risks are not symmetric. The
+    /// watcher abandons a notice it has not shown yet, so a late departure detection only costs
+    /// one more launch; here closing is irreversible for this session, and the transition it must
+    /// straddle includes a fade plus the run scene's construction. NGame.MainMenu is
+    /// RootSceneContainer.CurrentScene as NMainMenu (NGame.cs:444), and CurrentScene reports null
+    /// while a scene is queued for deletion (NSceneContainer.cs:47-70), so a menu RELOAD shows the
+    /// same null for a frame or two. A full departure is permanent, so waiting half a second
+    /// cannot swallow it and a reload cannot trigger it.
+    /// </summary>
+    private const int MenuGoneCloseFrames = 30;
+
     private NoticeKind _kind;
     private int _warmed;
     private bool _dismissed;
+    private int _menuGoneFrames;
 
     private Label? _stepsLabel;
 
@@ -115,7 +142,15 @@ internal sealed partial class ModNotice : Control, IScreenContext
                 return false;
             }
 
-            notice = new ModNotice { Name = NoticeNodeName, _kind = kind, _warmed = warmed };
+            // ProcessMode.Always for the same reason the watcher has it: the departure guard
+            // below must run even if the tree is paused while the notice is up.
+            notice = new ModNotice
+            {
+                Name = NoticeNodeName,
+                _kind = kind,
+                _warmed = warmed,
+                ProcessMode = ProcessModeEnum.Always
+            };
             notice.BuildUi();
             container.Add(notice);
             // Read back instead of assuming: success means the container actually adopted it.
@@ -473,7 +508,7 @@ internal sealed partial class ModNotice : Control, IScreenContext
         }
         catch (Exception e)
         {
-            MainFile.Log.Warn($"NOTICE: closing the popup failed ({e.GetType().Name}: {e.Message})");
+            MainFile.Log.Warn($"{PrefixFor(_kind)}: closing the popup failed ({e.GetType().Name}: {e.Message})");
             try
             {
                 if (GodotObject.IsInstanceValid(this))
@@ -483,6 +518,50 @@ internal sealed partial class ModNotice : Control, IScreenContext
             {
                 // nothing further can be done; the node dies with the container
             }
+        }
+    }
+
+    /// <summary>
+    /// Closes the notice if the main menu it belongs to is gone.
+    ///
+    /// The watcher stops watching as soon as this notice is adopted (ModNoticeWatcher._Process
+    /// calls QueueFree after a successful TryShow), so nothing else notices a scene change
+    /// while the notice is on screen. Without this guard a notice that outlived its screen
+    /// would keep a full-rect Control with MouseFilter.Stop plus the container's backstop on
+    /// top of the next scene, i.e. swallow the player's mouse until they find Escape. It is a
+    /// close, not a retry: the one-shot flag was already recorded when the notice was shown.
+    ///
+    /// The same "MainMenu == null" reading is used as in the watcher, with a wider tolerance;
+    /// see MenuGoneCloseFrames for why the two tolerances differ.
+    /// </summary>
+    public override void _Process(double delta)
+    {
+        try
+        {
+            if (_dismissed)
+                return;
+
+            MegaCrit.Sts2.Core.Nodes.NGame? nGame = MegaCrit.Sts2.Core.Nodes.NGame.Instance;
+            if (nGame != null && GodotObject.IsInstanceValid(nGame) && nGame.MainMenu != null)
+            {
+                _menuGoneFrames = 0;
+                return;
+            }
+
+            if (++_menuGoneFrames < MenuGoneCloseFrames)
+                return;
+
+            MainFile.Log.Info(
+                $"{PrefixFor(_kind)}: the main menu is gone (no main menu for {_menuGoneFrames} consecutive frames) while the " +
+                "popup was open; closing it so the modal cannot outlive the screen it belongs to");
+            CloseSelf();
+        }
+        catch (Exception e)
+        {
+            // A notice that cannot check the screen must not stay on top of it.
+            MainFile.Log.Warn(
+                $"{PrefixFor(_kind)}: the popup's menu check failed ({e.GetType().Name}: {e.Message}); closing the popup");
+            CloseSelf();
         }
     }
 
@@ -506,6 +585,11 @@ internal sealed partial class ModNotice : Control, IScreenContext
             if (@event is InputEventKey { Pressed: true, Echo: false } key &&
                 key.Keycode == Key.Escape)
             {
+                // Logged because "the player closed it" and "it never appeared" are
+                // indistinguishable after the fact from the UI alone, and the acceptance run
+                // must be able to tell them apart in godot.log.
+                if (!_dismissed)
+                    MainFile.Log.Info($"{PrefixFor(_kind)}: the player closed the popup with Escape");
                 CloseSelf();
                 GetViewport()?.SetInputAsHandled();
             }

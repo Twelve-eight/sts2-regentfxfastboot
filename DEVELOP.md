@@ -102,6 +102,18 @@ RFX **必须早于** RegentFX 加载,否则 `LoadScenes` 前缀装上时初始�
 **频率**:每种弹窗各仅提示一次(两个独立标志).状态在**展示成功时**记录(而不是按钮按下时),因此用户不点任何按钮直接退出游戏,下次也不会再弹.
 只有"确实显示过"才会记录 - 没能显示(模态槽位被占/主菜单未出现/看到菜单后离开)时不记录,下次仍会尝试.
 
+**弹窗自身的离开守卫(2026-10-26)**:观察器在 `TryShow` 成功后立刻 `QueueFree`,所以弹窗出现之后
+**没有**任何代码再看场景;而 `NModalContainer` 位于 `NSceneContainer` 之外,主菜单→对局的场景替换
+**不会**清模态(引擎里 `Clear()` 只有五处:`NVerticalPopup.cs:189`、`NFtue.cs:73`、`NCreditsScreen.cs:458`、
+`NEarlyAccessDisclaimer.cs:104`、`RunManager.cs:1586`(`CleanUp`,对局结束时),都不在"进对局"这条路上).
+于是在观察器的 30 帧 settle 期间玩家已点开始/继续、拖放文件触发切场景(`FileDropHandler`,modded 环境启用)、
+或控制台跳场景时,弹窗会带着全屏 `MouseFilter=Stop` 与容器背板停在对局/下一屏上,吞掉玩家的鼠标.
+`ModNotice._Process` 因此自带守卫:连续 `MenuGoneCloseFrames = 30` 帧 `NGame.MainMenu == null` 就记一行
+`the main menu is gone (...) while the popup was open; closing it ...` 并 `CloseSelf()`(`ProcessMode=Always`).
+容差取 30 而观察器取 3 是因为风险不对称:观察器放弃的是**还没显示**的通知(代价=下次启动再试),这里
+是**不可逆**关闭,要跨过淡出+场景构建;而菜单 reload 造成的 null 只有一两帧(`NSceneContainer.cs:47-70`),
+0.5s 容纳前者且不会被后者触发. 该守卫只关闭、不重试,也不写任何状态.
+
 **槽位判定按“存活”而非“非空”**:引擎的 `NConfirmModLoadingPopup` 与 `NGenericPopup`
 都以 `QueueFreeSafely()` 结束且**不**调 `Clear()`,而 `NModalContainer` 没有子节点离树回调,
 于是 `OpenModal` 会持续指向一个已释放对象.引擎自己的 `Add()` 在该状态下**也会拒绝**
@@ -126,6 +138,11 @@ RFX **必须早于** RegentFX 加载,否则 `LoadScenes` 前缀装上时初始�
 **日志前缀**:失败弹窗用 `NOTICE:`,成功弹窗用 `NOTICE-SUCCESS:`(两个前缀互不为子串,
 所以 `NOTICE:` 的模式不会命中成功行).验收脚本的断言全部按前缀分域 - 否则成功行的
 "one-shot state recorded" 会被算到失败弹窗头上.
+
+两条关闭日志(2026-10-26 新增,同样按前缀分域):`the player closed the popup with Escape` 与
+`the main menu is gone (...) while the popup was open; closing it ...`.第三个原本写死 `NOTICE:` 的
+失败行(`closing the popup failed`)已改为按 kind 取前缀.三者都**不**匹配
+`verify-fastboot-order.ps1` 的既有关闭/丢弃候选,所以脚本无需再改.
 
 ### 验收顺序(不可颠倒)
 
@@ -216,4 +233,27 @@ SDK 会自动嵌入 `<Version>1.0.0+<git sha></Version>`,所以**同一份源码
   IL 输出不含 COFF 时间戳/调试 GUID/版本属性 blob,因此该比对与内嵌 sha 无关.
 - 只有**改动了源码**才需要重新构建暂存;仅提交文档/日志不需要(不改变 DLL 代码).
   载荷的内嵌 provenance 指向"构建时 HEAD",这对它本身是完全正确的语义 - 不要把它读成"载荷过期".
+
+### 发布时用哪一份字节(2026-10-26 决策规则)
+
+历史上存在三份候选字节,只有一份能发:
+
+| 字节集 | 出处 | 缺什么 | 能否发 |
+|---|---|---|---|
+| 58880 B `27c6fc08616bc025` | 提交 `5617495`(2026-09-16) | 缺 `055acaf` 的离开菜单终态,缺 10-02 三修 | 否 |
+| 59904 B `40c2dbc51091f266` | 2026-09-17 的 Release 产物 / E: 副本(**本仓从未提交**) | 缺 `40a59ae`/`74aa0d3`/`df37b2f` | 否 |
+| 68096 B | 提交 `8092443`(2026-10-05)的暂存 | 相对当时源码是完整的 | 仅"重建+比对通过"后 |
+
+规则(顺序不可颠倒):
+
+1. **改过源码就得重建**:任何现存字节集都不再代表源码,唯一合法来源是当前源码的构建产物.
+2. 同一 HEAD 连建两次必须字节相同(确定性已证),记录 xxhash64 + 尺寸.
+3. 与暂存副本比对:若唯一差异是 `1.0.0+<sha>`,视为同一;否则用重建替换暂存.
+   **绝不**用更旧的字节集回填.
+4. json 必须是 `mod/RegentFXFastBoot.json` 的逐字节 CRLF 副本(源侧一改就要重拷).
+5. pdb 必须与 dll 来自**同一次**构建.
+6. 源码一改就重新生成 `tools/il-evidence`,并用"IL/字符串集 + 忽略版本 blob"判同一.
+7. 发布次序:构建 -> 暂存 -> 提交 -> `tools/check-live-payload.ps1` exit 0 -> 才允许启动游戏.
+
+判据一句话:**发"当前源码的构建产物",不发"仓库里现存最大的那个字节集"**.
 

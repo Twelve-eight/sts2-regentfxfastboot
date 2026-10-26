@@ -852,3 +852,143 @@ consecutive frames)`)并 `QueueFree()`;未显示**不**写一次性状态,下次
 - 本仓来源通过不是全量可上传证明. 全量仅Spire1 REBUILD_REQUIRED, 因另一个Forms会话正在改其源码; 正式Spire1 wrapper GuardsOnly在全量provenance拒绝. -Only不豁免正式上传入口的全量检查.
 - 复制前备份r4-staging-backup.json, 最终本仓各文件hash在r4-final-seven-payloads.json. 原refresh的freshness在复制后核验, 失败不保证全部staging未写; 本次有效刷新不回填旧包.
 - 本轮无新增游戏运行验收. 只精确备份本仓发布暂存与本段日志, 保留已有dirty源码/路径清理/advice删除, 不git add -A. 中央接续入口G:/omp works/Sts/sts2-spire1/docs/CHECKPOINT-workshop-prep-20261005.md.
+
+## 2026-10-26 静态交接: 工作树变更解释, 载荷身份定案, 弹窗关闭/提前离开审查, 实机清单
+
+本轮**只做静态工作**: 未构建, 未启动游戏或 Steam, 未 commit/push, 未写 E:/G:/steam/C:, 未改任何用户存档.
+源码改动只有一个文件(`ModNotice.cs`), 其余是记录.
+
+### 1. 工作树里那些未提交变更, 逐项是什么(全部重新取证, 不采信旧叙述)
+
+| 文件 | 变更 | 结论 |
+|---|---|---|
+| `mod/RegentFXFastBoot.csproj` | `NoWarn` 增加 `STS002` | 合理. STS002 = 模板分析器对"无 PCK / 无内容 mod"的噪声告警(本仓 git 历史里的 `astra-advice.md` 原话:"no PCK/无内容的 STS002 警告是模板分析器噪声"),与本仓 manifest `has_pck:false` 且无任何内容类的事实一致;`DEVLOG.md:346` 也把它记为"预存在的 Publicizer/STS002 告警". STS001(本地化门禁)仍是错误级,未被抑制. 注意:NoWarn 是**全局**的,将来真加了内容类要复核一次. 写法与 `Sts/sts2-forms` 三个 csproj 一致. |
+| `mod/RegentFXFastBoot.json` | 描述追加"无设置页/不注册 run 内容/不写 settings.save, 不编辑 mod_configs, 不改顺序" | 与代码一致:全仓唯一写入面是 `NoticeState` 的 `notice.json`(`Directory.CreateDirectory` + `File.WriteAllText`),`SettingsSave` 只被**读**过一次(`Language`). 方向是**源码 manifest 反向对齐已发布的暂存 json**:`git show HEAD:mod/RegentFXFastBoot.json` 没有这句,而 `workshop/content/.../RegentFXFastBoot.json` 已经有(HEAD 就带) → 这不是新增承诺,是把源侧补齐. |
+| `mod/Sts2PathDiscovery.props` | 发现链改为"测试副本优先(Sts2TestPath → E: → _runtime/sts2-test-client-B),不再回退 Steam" | 合理且与 §2b/§6 硬规则一致. "找不到就大声失败"确实成立,但兜底的是 **csproj 的 `CheckDependencyPaths`**(InitialTargets,`Sts2DataDir` 空或不存在就 `<Error>`),不是 props 自己;这点已核. 副作用(正确方向):默认构建的 `CopyToModsFolderOnBuild` 因此写测试副本 `mods/`,不再写 Steam 安装. 遗留:`RegentFxDll` 仍是 `G:/steam/.../3747497501/RegentFX.dll` 的只读引用(本 diff 未动),Steam 副本不存在时该 `<Reference>`/`Publicize` 会静默跳过,构建在编译期缺类型. |
+| `tools/check-live-payload.ps1` | `-StagedRoot` 由 `G:\omp works\sts2-regentfxfastboot\...` 改为 `G:\omp works\Sts\sts2-regentfxfastboot\...` | 真 bug 修复:旧路径已核实不存在(`glob` 报 missing),改前每次运行都会 exit 2 MISSING,即"上传后门禁"根本跑不起来. 比较逻辑(哈希 → UTF-16 字符串集 → 内嵌版本串)未动. |
+| `workshop/.../RegentFXFastBoot.dll` `.pdb` | 二进制变更,HEAD 与工作树**同为** 68096 B / 41576 B,字节不同 | 见第 2 节. |
+| `tools/il-evidence/il-new.txt` | 只把 5 条中文串由 mojibake 重编码为 UTF-8(逐行 diff 仅这 5 对) | 不改变证据价值:该文件仍是 **0.3.0** 的 IL(`LateOrderNotice*`、无参 `TryShow()`、无 `_absentFrames`),README 顶部的 STALE 声明继续成立 → 它不能作为当前载荷的证据. |
+| `DEVLOG.md` | 三处 `../docs/...` → `../../docs/...` | 对:仓库已挪到 `Sts/` 下,目标文件已逐个核实存在(`docs/project/STS-PERFORMANCE-PLAN-2026-09-15.md`、`docs/performance-evidence/2026-09-15/{implementation-plan.json,regent-probe-results.json,GATE-1-PAYLOAD-VERIFICATION.md}`). |
+| `astra-advice.md`(删除,83 行) | 2026-09-12 的建议快照 | 其结论已折叠进 `DEVELOP.md` §1/§2 与 DEVLOG;仓内无活跃引用(只有 `DEVLOG.md:4`/`:355` 的历史叙述). 删除合理,予以保留(工作树属于另一个会话,不回退). |
+| `.omp/hooks/pre/backup.ts` | `git add -A`/`git commit` 现在检查退出码并写日志 | 行为未变(仍 add -A + commit),只是失败不再静默. 与本仓交付无关,保留. |
+
+### 2. 载荷身份定案(回应 `DEVLOG.md:836-845` 的 58880 / 59904 / 现暂存 68096)
+
+三份字节集分别是(全部有出处,尺寸/时间/行数互相印证):
+
+| 字节集 | 出处 | 是什么 | 该不该发 |
+|---|---|---|---|
+| 58880 B `27c6fc08616bc025` | 提交 `5617495`(2026-09-16) | 当时的 0.4.0:双弹窗 + 悬挂模态槽位修复 + 预算拆分. **不含** `055acaf` 的离开菜单终态,也不含 10-02 三修 | **否** |
+| 59904 B `40c2dbc51091f266` | 2026-09-17 14:20:47 的 Release 产物 + E: 安装副本(旧记录);**本仓从未提交过这份字节** | 含离开菜单终态,但**不含** `40a59ae`/`74aa0d3`/`df37b2f` | **否** |
+| 68096 B | 提交 `8092443`(2026-10-05)的暂存;工作树同尺寸不同字节 | 唯一晚于最后一次源码提交(`df37b2f` 2026-10-02)的构建 | 仅在"重建 + 比对通过"前提下 |
+
+- 尺寸差有可核对的源码增量,不是猜的:`055acaf` 给 `ModNoticeWatcher` +56 行 / `MainFile` +5 行(58880→59904,+1024 B);10-02 三修 `055acaf` 之后合计 589 insertions(`40a59ae` 412 / `df37b2f` 120 / `74aa0d3` 57),对得上 59904→68096(+8192 B). 提交时间也都对得上.
+- 两份 68096 同尺寸不同字节:**本轮工具无法读二进制**(见 Difficulties),故不下字节级结论. 但按 `DEVELOP.md` §6 已记录的结构性事实,SDK 会把 `<Version>1.0.0+<git sha></Version>` 内嵌进 DLL,40 位 hex 定长 → 换 HEAD 重建必然得到**同尺寸、不同字节**;反之"代码变了"几乎必然改尺寸. 因此最可能只差 provenance(**[B]** 强推断),必须由主会话用字节级证据定案.
+- **决策规则(主会话按此执行,别反着来)**:
+  1. 本轮改了 `ModNotice.cs` → 现存任何一份 68096 都**不再代表源码**. 唯一合法载荷来源是"当前源码的新构建".
+  2. 同一 HEAD 连建两次必须字节相同(`4afe28b` 已证确定性);记录 xxhash64 + 尺寸.
+  3. 与暂存副本比对:若唯一差异是 `1.0.0+<sha>`,视为同一(provenance 差异);否则用重建替换暂存. **绝不**用 58880/59904 回填(它们缺的正是本次要发的那几个修复).
+  4. `workshop/content/.../RegentFXFastBoot.json` 必须是 `mod/RegentFXFastBoot.json` 的逐字节 CRLF 副本 — 工作树的描述刚改过,提交后要重拷一次.
+  5. `.pdb` 必须是**同一次**构建的 pdb(不能拿旧 pdb 配新 dll).
+  6. 重新生成 `tools/il-evidence`(现文件是 0.3.0 的),并按 `DEVELOP.md` §6 用"IL/字符串集 + 忽略版本 blob"判同一.
+  7. 发布顺序不可颠倒:构建 → 暂存 → 提交 → `tools/check-live-payload.ps1` exit 0 → 才允许启动游戏.
+- 一句话:**发的是"当前源码的构建产物",不是"仓库里现存最大的那个字节集"**. 58880 / 59904 是历史存档;68096 是上一轮的构建候选;本轮改动之后,只有新构建有效.
+
+### 3. 弹窗显示/点击/关闭路径的静态审查(回应 `DEVLOG.md:749` 的未验证项)
+
+只报能追到引擎源码的结论(引擎来源:`G:/omp works/.tmp/sts2-game-decompile/`).
+
+**已核通过(不是运气)**:
+- 收养判定可读:`AddChildSafely` 在主线程且父节点已 ready 时是**同步** `AddChild`(`GodotTreeExtensions.cs:9-18`),所以 `IsAdopted()`(`OpenModal==this` + 父节点 + `IsInsideTree`)在 `Add()` 之后立即可读.
+- "槽位按存活判定"是必需的:引擎自己的三种 popup 关闭时只 `QueueFreeSafely()` 不 `Clear()`(`NAbandonRunConfirmPopup.cs:152/157`、`NDisconnectConfirmPopup.cs:138/143`、`NErrorPopup.cs:309/314`),`OpenModal` 会指向已释放对象,而 `Add()` 测的是同一个字段(`NModalContainer.cs:100-104`)→ 引擎不会自愈. 现实现用引擎自己的 `Clear()` 释放一次且不递归,正确.
+- 关闭不会误杀别人的模态:`Clear()` 释放**所有**非 backstop 子节点(`NModalContainer.cs:114-126`),现实现只在 `OpenModal == this` 时调用.
+- 手柄/键盘可达:我们的通知就是 `OpenModal`,而 `GetCurrentScreen()` 优先返回它(`ActiveScreenContext.cs:47-50`);一旦用方向键/手柄,`OnScreenContextChanged` 会 defer `FocusOnDefaultControl()`(`NControllerManager.cs:464-477`),焦点落在 `DefaultFocusedControl` → 确认键即可关闭. 鼠标路径由容器 `MouseFilter=Stop` + 全屏 scrim 拦截,按钮本身 `Stop` 且在最上层.
+- 主题常量存在:`mega_text/ThemeConstants.cs` 有 `Label.FontSize="font_size"`(:18)、`MarginContainer.MarginLeft="margin_left"`(:83)、`BoxContainer.Separation="separation"`(:97).
+
+**发现并已修(3 处)**:
+1. (中) **弹窗会在离开主菜单后继续停在下一个屏幕上**. 观察器在 `TryShow` 成功后就 `QueueFree`,之后没人再看场景;而 `NModalContainer` 在 `NSceneContainer` 之外,主菜单→对局的场景替换**不会**清模态(引擎里 `Clear()` 的调用点一共五处:`NVerticalPopup.cs:189`、`NFtue.cs:73`、`NCreditsScreen.cs:458`、`NEarlyAccessDisclaimer.cs:104`、`RunManager.cs:1586`(后者是 `CleanUp`,即对局**结束**时的清理),没有一处在"进对局"这条路上). 可达面:观察器 30 帧 settle 期间玩家已点开始/继续(场景替换发生在淡出之后)、拖放文件触发切场景(`FileDropHandler` 在 modded 环境启用)、控制台动作. 后果是全屏 `Control(MouseFilter=Stop)` + 容器背板盖在对局/下一屏上,玩家必须找到 Esc 才能继续点. **修法**:`ModNotice` 增加 `_Process` 离开守卫——连续 `MenuGoneCloseFrames = 30` 帧 `NGame.MainMenu == null` 就记一行并 `CloseSelf()`(`ProcessMode=Always`,与观察器同因). 容差取 30 而不是观察器的 3:观察器放弃的是"还没显示的通知"(代价=下次启动再试),这里是**不可逆**关闭,要跨过淡出+场景构建;而菜单 reload 造成的 null 只有一两帧(`NSceneContainer.cs:47-70`),0.5s 既能容纳前者又不会被后者触发.
+2. (低) **Esc 关闭没有日志**:关闭与"从没出现"在事后不可区分,验收只能猜. 已加 `NOTICE`/`NOTICE-SUCCESS`: `the player closed the popup with Escape`.
+3. (低) **关闭失败那行前缀不分域**:原写死 `NOTICE: closing the popup failed`,成功弹窗的失败会被算进失败弹窗域,违背本仓"两个前缀互不为子串、断言全部分域"的契约. 已改为 `PrefixFor(_kind)`.
+
+**判为不是缺陷(未改)**:
+- 手柄 B(`ui_cancel`)不能关闭:引擎自己的 `NVerticalPopup` 也只能点按钮关(无 `_Input`),本 mod 的 Esc 已是超集;加 `ui_cancel` 反而制造行为分叉.
+- 不点任何按钮直接退出游戏:一次性状态在**展示时**已写,下次不再弹——既定契约,不改.
+- 点遮罩不关闭:设计如此(失败弹窗必须让玩家看到按钮).
+
+**诚实声明**:以上全部是静态审查(源码 + 反编译引擎). 没有实例化 Godot 节点/SceneTree/UI,没有启动游戏. 新增的 `ModNotice._Process` **不在** `tools/notice-lifecycle/model.py` 的建模范围内(那个模型只建模 `ModNoticeWatcher`),本轮未扩展模型——这是已知缺口,不是"已建模". 验收脚本 `tools/verify-fastboot-order.ps1` 的三个丢窗正则与本次新增日志串**不**冲突(新串开头分别是 `the main menu is gone (no main menu for` 与 `the player closed the popup with Escape`,都不匹配既有候选).
+
+### 4. 实机冒烟清单(Deliverable B,主会话照做即可)
+
+**测试副本与位置**(三个都在,已核实):
+- `E:/Slay the Spire 2`(主测试副本,mods/ 下已有 `RegentFXFastBoot/{dll,json,pdb}` 与 `RegentFX/{dll,json,pck}`)
+- `E:/sts2smokeA`、`E:/sts2smokeB`(备用;两者都有 `data_sts2_windows_x86_64/`,但**不在** props 的发现链里,
+  要用它们必须显式 `-p:Sts2Path=E:/sts2smokeA`)
+- `G:/omp works/Sts/_runtime/sts2-test-client-B`(同为本地 mods,已含 RegentFXFastBoot + RegentFX)
+- 建议用 **`G:/omp works/Sts/_runtime/sts2-test-client-B`** 或 `E:/Slay the Spire 2`:两者都是"本地装两份"的结构,和 §2 的 mod_list 语义一致,不引入工坊副本.
+
+**共用事实(必须先知道)**:
+- `user://` 是**按项目名**的,与副本路径无关 → 三个副本共用 `%APPDATA%/SlayTheSpire2/`:日志 `%APPDATA%/SlayTheSpire2/logs/godot.log`,一次性状态 `%APPDATA%/SlayTheSpire2/RegentFXFastBoot/notice.json`,存档 `%APPDATA%/SlayTheSpire2/steam/76561199466878739/settings.save`. **一次只跑一个副本**,跑前把 godot.log 备份/清空,否则行数会串.
+- 复测弹窗必须先删 `notice.json`(或在里面把要测的那个键改成 `false`),否则 `Schedule` 直接走 `already shown in an earlier launch`.
+- 载荷必须先过关:`powershell -File tools/check-live-payload.ps1` 对**工坊**路径;对本地副本用手工比对:
+  `(Get-FileHash 'G:/omp works/Sts/sts2-regentfxfastboot/workshop/content/RegentFXFastBoot/RegentFXFastBoot.dll').Hash` 必须等于对应副本 `mods/RegentFXFastBoot/RegentFXFastBoot.dll` 的哈希. 不相等就别测——那是**假阴性**来源.
+
+**第 0 步 准备(主会话)**
+1. 关闭游戏(`Get-Process SlayTheSpire2` 必须为空;`verify-fastboot-order.ps1` 会自己 exit 2 拦).
+2. 构建 + 按第 2 节规则暂存;把新的 `RegentFXFastBoot.{dll,pdb,json}` 复制到所选副本的 `mods/RegentFXFastBoot/`.
+3. 备份 `settings.save` → `settings.save.pre-rfx-popup-20261026.bak`.
+4. 观察方式:上述两条哈希命令输出相同;失败标准:哈希不同或副本目录里出现第二份 RegentFXFastBoot(工坊 + 本地).
+
+**第 1 步 晚序 → 失败弹窗(必须**先**做,顺序修好后永不再现)**
+1. 确认 `mod_list` 里 RegentFXFastBoot 的**最后一行**下标 > RegentFX 的最后一行下标(晚序). 可先跑一次游戏再退出:`verify-fastboot-order.ps1` 会报 `load priority inverted` — 这是**本步期望**,不是故障.
+2. 删除 `%APPDATA%/SlayTheSpire2/RegentFXFastBoot/notice.json`.
+3. 清空/备份 godot.log,启动所选副本.
+4. 观察(日志):`grep -n "NOTICE:" %APPDATA%/SlayTheSpire2/logs/godot.log` 期望顺序
+   `NOTICE: popup scheduled` → `NOTICE: the main menu is up; waiting for it to settle before showing the popup` → `NOTICE: late-order popup shown on the main menu (once)` → `NOTICE: one-shot state recorded at`.
+   同一次启动里**不应**出现任何 `NOTICE-SUCCESS:` 行(晚序不会调度成功弹窗).
+5. 观察(画面,截图):主菜单中央一块半透明黑罩 + 面板,标题 `RegentFX Fast Boot`,正文说明"本次启动没有加速…",两个按钮 `使生效` / `不再提示`(中文语言时).
+6. 点击路径:①点「使生效」→ 期望浏览器打开 `steamcommunity.com/sharedfiles/filedetails/?id=3747605109`,步骤文本变成"已打开…";日志 `NOTICE: player asked how to make the acceleration take effect`. ②点「不再提示」→ 弹窗消失、主菜单恢复可点;日志 `NOTICE: player dismissed the late-order notice`. ③另起一次(重删 notice.json)按 Esc → 弹窗消失;日志 `NOTICE: the player closed the popup with Escape`.
+7. 关游戏后跑 `tools/verify-fastboot-order.ps1`.
+   通过标准:报告 `late-order notice shown once`、`notice one-shot state recorded`,且 `notice.json` 含 `"noticeShown": true`;若日志里显示过而状态文件没记录 → 失败.
+8. 再启动一次(不删 notice.json)→ 期望 `NOTICE: popup already shown in an earlier launch` 且**无**弹窗(截图:主菜单干净).
+
+**第 2 步 提前离开(观察器丢弃路径)**
+1. 重删 notice.json,保持晚序,启动副本.
+2. 主菜单一出现就**立刻**点「继续/单人」进对局(观察器的 settle 只有 30 帧 ≈0.5s,手快点即可;不行就重试,或把鼠标提前停在按钮位置连点).
+3. 观察(日志),二者必有其一,且都算**通过**:
+   - `NOTICE: the main menu went away before the popup could be shown (no main menu for N consecutive frames)` → 丢弃路径生效;此时 `notice.json` **不应**被创建/不应含 `noticeShown: true`(没显示不记账).
+   - 或弹窗先弹出来(`NOTICE: late-order popup shown`)并**拦住了**点击 → 对局没开始,这说明模态拦截正确.
+4. 通过标准:不存在"进了对局却没有上述任何一行"的第三种情况;也不存在对局中仍然盖着弹窗(若发生 → 第 3 步的守卫失效,直接判失败并附截图).
+5. 再启动一次(此时 notice.json 应仍是未记录状态,如果走了丢弃路径)→ 期望弹窗这次正常出现(证明丢弃不影响下次).
+
+**第 3 步 弹窗已显示时离开主菜单(本轮新增守卫)**
+- 这一步**无法**靠正常 UI 触发(弹窗会拦鼠标),所以只在两种情况下做:
+  - 主会话愿意用调试手段:开 `SettingsSave.FullConsole` 后拖一个 run-history 文件到窗口(`FileDropHandler.OnFilesDropped` 在 modded 环境启用),或控制台跳场景.
+  - 或者跳过本步,只把第 2 步第 4 条的"对局中仍盖着弹窗"当作现场判据.
+- 期望日志:`NOTICE: the main menu is gone (no main menu for N consecutive frames) while the popup was open; closing it so the modal cannot outlive the screen it belongs to`,且弹窗消失、对局可点.
+- 通过标准:对局/下一屏里**没有**属于本 mod 的遮罩或面板(截图).
+
+**第 4 步 早序 → 成功弹窗**
+1. 用 Load Order Manager(或任何写 `settings.save` 的工具)把唯一的 RegentFXFastBoot 行移到 RegentFX 上方,`Apply`,关游戏.
+2. 重删 notice.json(或只把 `successShown` 置 false),清空 godot.log,启动.
+3. 观察(日志):`NOTICE-SUCCESS: popup scheduled` → `NOTICE-SUCCESS: the main menu is up` → `NOTICE-SUCCESS: popup shown on the main menu (once): acceleration ran and N scene(s) were warmed` → `NOTICE-SUCCESS: one-shot state recorded at`. `N` 必须等于同日志里 `COMPLETED (...)`: `warmed=N` 的值(脚本会交叉核对).
+4. 观察(画面,截图):单个 `知道了` 按钮的弹窗;点击后消失,日志 `NOTICE-SUCCESS: player acknowledged the success notice`.
+5. 关游戏跑 `verify-fastboot-order.ps1`:期望 exit 0,含 `success notice shown once`、`success notice backed by the log: warmed=N failed=0 notSubmitted=0`,以及 `no late-order notice scheduled (correct for an early-order run)`.
+6. 再启动一次 → 期望 `NOTICE-SUCCESS: popup already shown in an earlier launch` 且无弹窗.
+
+**失败时最该看的三件事**:①`notice.json` 是否存在、两个键的值;②`godot.log` 里 `NOTICE` 行**是否成对**(scheduled 必须有 shown 或 dropped);③本轮新增的两行是否出现——出现即说明"离开菜单"这条路径被走过了.
+
+### 5. 未做(明确边界)
+
+- **未构建,未启动游戏/Steam**:所有"实机"结论仍是待办,清单在第 4 节.
+- **未提交/推送**:载荷、源码改动、本文都留在工作树.
+- **未改载荷**:`workshop/content/.../RegentFXFastBoot.{dll,pdb}` 的二进制变更保留原样(属于另一个会话),本轮只给决策规则.
+- `tools/il-evidence` 未重新生成(需要新载荷);`tools/notice-lifecycle/model.py` 未扩展到 `ModNotice._Process`.
+- `Alchyr.Sts2.ModAnalyzers` 仍是浮动版本 `Version="*"`(预存在,未动):STS001/STS002 的门禁行为可能随包升级漂移.
+
+## 2026-10-27 后台启动烟测（smokeA，AGENTS §2e-2）
+
+- 副本 `E:/sts2smokeA`，`.tooling/sts2-autoslay-smoke.ps1 -Tag regentfx-20261027`；部署 RegentFX（取自 `E:/Slay the Spire 2/mods/RegentFX`，pck 60716376 B）+ 当前源码重建的 RegentFXFastBoot.dll（69632 B）+ BootTimer.dll（52736 B，v0.2.0）。8 个 mod 全加载。日志 `.tmp/smoke-regentfx-20261027/godot.log`。
+- RegentFXFastBoot：32 条 `WARMED`，`COMPLETED (the queue drained): warmed=32, alreadyCached=0, failed=0, notSubmitted=0.`（:732），无异常。
+- BootTimer 新里程碑：`preload-engine-sessions-idle` 在 18:13:09.982（:399），`main-menu-visible` 18:13:21.168（:424），`warmup-consumer-terminal` 18:13:30.270（:731，与 FastBoot COMPLETED 同一帧）。证实"引擎预载空闲"比"预热完成"早约 20 秒，两者确实是不同事件。
+- 已知不足：`[SUMMARY]` 在主菜单出现时打印（:427-448），早于预热完成，所以 SUMMARY 里 `warmup-consumer-terminal observed=false`；实际里程碑之后才到。SUMMARY 时机需要推迟到 warm-up terminal 或加一次补打 [待修]。
+- 未测：通知弹窗的人工点击/Esc/离开菜单路径（需要 §2e 窗口）。恢复：AppData 3311 个文件 mismatch=0。
