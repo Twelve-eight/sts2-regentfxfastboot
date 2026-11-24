@@ -79,6 +79,8 @@ RFX **必须早于** RegentFX 加载,否则 `LoadScenes` 前缀装上时初始�
 
 三条终态路径(未看到菜单超时/离开菜单/槽位预算耗尽)与成功路径**都** `QueueFree()`,
 且**只有** `ModNotice.TryShow` 成功时才会写一次性状态 - 被丢弃的通知永远不记为已显示.
+终态在同一个 `_Process` 中先闩锁、后 `QueueFree()`；Godot 延迟删除前再投递帧也不会重复展示、记账或释放。`_ExitTree` 同样闩锁；复用既有生命周期，不新增泵或任务续体。
+
 
 **决策模型(不是实机验证)**:`tools/notice-lifecycle/model.py` 逐帧建模 `_Process` 的
 状态机,并从 C# 源解析全部常量(防止模型与源码漂移),覆盖:菜单始终不出现、看到后离开、
@@ -129,11 +131,12 @@ RFX **必须早于** RegentFX 加载,否则 `LoadScenes` 前缀装上时初始�
 
 - **每次写入都写两个标志的并集**.文件是整体覆写,只写刚变化的那个标志会抹掉另一个,
   让被抑制的弹窗复活.
-- **每次读取只匹配自己那个键** (`"noticeShown"\s*:\s*true`).裸搜 `true` 会把
-  `{"noticeShown": false, "successShown": true}` 读成"失败弹窗已经显示过",静默压掉本该出现的那个.
+- **每次读取使用 JSON 对象中的精确布尔键**（`noticeShown` / `successShown`）。畸形 JSON、非布尔值或重复的已知键都算读错，不能通过裸搜 `true` 或 regex 前缀匹配来压掉本该出现的通知。兼容只含旧 `noticeShown` 的合法对象。
+- **失败不覆盖最后有效文件**：同目录独占临时文件先写完并 flush。读取时确认存在的文件用 `File.Replace` 原子提交；读取时不存在的文件只用不覆盖的 `File.Move`，其间其它进程抢先创建则本次失败且不覆盖。任何读取错误直接拒写，提交失败返回 false 并清理本次临时文件；不在失败后截断、删除或回填原文件，不做隐式重试。`Sync` 保证本进程内读取/并集/提交串行；不宣称同时运行的多个游戏进程对既存文件具有跨进程并集事务。
+- **保留最后已知状态**：当前 user-data 路径已读到或已成功提交的 true 在本进程内不因文件缺失/锁定/畸形变回 false；全新无文件没有任何 true，不被当成成功。切换非空 user-data 路径时清空旧路径的缓存。只有原子提交完成才 `MarkShown=true`，展示成功但落盘失败仍由调用者如实警告。
 
-读写全部包在 try/catch 内:**任何失败都不得影响游戏**,最坏情况只是多弹一次.
-本文件是 mod 唯一写入的文件:弹窗**不写** `settings.save`,也**不重排**任何 mod.
+读写全部包在 try/catch 内：**任何失败都不得影响游戏**。读错保留最后已知值并拒绝覆盖；未曾确认的通知仍可多弹一次，绝不凭读取失败创造已显示状态。
+本 mod 只写这份通知状态及其同目录临时提交文件：弹窗**不写** `settings.save`，也**不重排**任何 mod。
 
 **日志前缀**:失败弹窗用 `NOTICE:`,成功弹窗用 `NOTICE-SUCCESS:`(两个前缀互不为子串,
 所以 `NOTICE:` 的模式不会命中成功行).验收脚本的断言全部按前缀分域 - 否则成功行的
@@ -208,7 +211,9 @@ RFX **必须早于** RegentFX 加载,否则 `LoadScenes` 前缀装上时初始�
 ## 6. 构建与发布
 
 - 构建必须带 `-p:CopyToModsFolderOnBuild=false -p:ModsPath="G:/omp works/.tmp/mods-scratch/"`,
-  否则 csproj 的 after-target 会把 DLL 写回真实 mods 目录,重新制造"同 id 两行"的晚序陷阱.
+  否则 csproj 的 after-target 会把 DLL 写回 `$(ModsPath)` 下的 mods 目录,重新制造"同 id 两行"的晚序陷阱.
+  2026-10-26 起 `Sts2PathDiscovery.props` 的发现链只认**测试副本**(不再回退 Steam),所以不加该参数时
+  落点是测试副本的 `mods/`,不会写 Steam 安装;但临时构建仍应带该参数,避免污染测试副本.
 - 载荷:`workshop/content/RegentFXFastBoot/` 下 `RegentFXFastBoot.{dll,json,pdb}`,
   json 为 `mod/RegentFXFastBoot.json` 的**逐字节 CRLF 副本**.
 - 上传:`workshop/workshop_upload.vdf`(publishedfileid `3799305611`).

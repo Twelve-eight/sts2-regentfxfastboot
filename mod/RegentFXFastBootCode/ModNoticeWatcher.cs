@@ -68,6 +68,7 @@ internal sealed partial class ModNoticeWatcher : Node
     private int _framesSinceAttempt;
     private int _absentFrames;
     private bool _menuSeen;
+    private bool _finished;
 
     /// <summary>
     /// Attaches a watcher when the notice still needs to be shown. Every failure path is
@@ -126,12 +127,16 @@ internal sealed partial class ModNoticeWatcher : Node
 
     public override void _ExitTree()
     {
+        _finished = true;
         _warmed = 0;
         base._ExitTree();
     }
 
     public override void _Process(double delta)
     {
+        if (_finished)
+            return;
+
         try
         {
             // The frame budget applies ONLY to waiting for the menu. It used to be charged on
@@ -147,7 +152,7 @@ internal sealed partial class ModNoticeWatcher : Node
                 MainFile.Log.Warn(
                     $"{PrefixFor(_kind)}: the main menu did not appear within {MenuWaitFrameLimit} frames; the popup is dropped " +
                     "for this launch and will be offered again next launch");
-                QueueFree();
+                Finish();
                 return;
             }
 
@@ -171,7 +176,7 @@ internal sealed partial class ModNoticeWatcher : Node
                 MainFile.Log.Warn(
                     $"{PrefixFor(_kind)}: the main menu went away before the popup could be shown (no main menu for " +
                     $"{_absentFrames} consecutive frames); the popup is dropped for this launch and will be offered again next launch");
-                QueueFree();
+                Finish();
                 return;
             }
             // The menu is back (or never left). Any absence counted above was transient, and
@@ -201,19 +206,29 @@ internal sealed partial class ModNoticeWatcher : Node
                 MainFile.Log.Warn(
                     $"{PrefixFor(_kind)}: the engine's modal slot stayed busy for {ShowAttemptLimit} attempts; the popup is dropped " +
                     "for this launch and will be offered again next launch");
-                QueueFree();
+                Finish();
                 return;
             }
             _attempts++;
 
             if (ModNotice.TryShow(_kind, _warmed))
-                QueueFree();
+                Finish();
         }
         catch (Exception e)
         {
             MainFile.Log.Warn($"{PrefixFor(_kind)}: the popup watcher failed ({e.GetType().Name}: {e.Message}); dropping it for this launch");
-            QueueFree();
+            Finish();
         }
+    }
+
+    private void Finish()
+    {
+        // QueueFree is deferred. No later callback may retry or record a terminal notice
+        // again while the node is waiting for Godot to release it.
+        if (_finished)
+            return;
+        _finished = true;
+        QueueFree();
     }
 
     /// <summary>Per-kind log prefix, so the acceptance script can scope each notice's assertions.</summary>

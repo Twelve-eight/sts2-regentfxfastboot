@@ -86,13 +86,13 @@ Current assessment supersedes the earlier full-chain claim without rewriting his
 - The isolated already-activated assembly callback allocates 32 bytes/call. Lifecycle correctness and native load scheduling take priority over this minor allocation.
 - Prefer the existing live NAssetLoader and serial AssetLoadingSession behavior. Its early Instance fallback is unattached, Task=true is not resource success, and non-VFX failure may synchronously retry; acceptance must cover those boundaries.
 
-Plan: [STS-PERFORMANCE-PLAN-2026-09-15.md](../docs/STS-PERFORMANCE-PLAN-2026-09-15.md). Machine-readable task IDs RFX-1/RFX-2 and all-project ownership: [implementation-plan.json](../docs/performance-evidence/2026-09-15/implementation-plan.json). Evidence: [regent-probe-results.json](../docs/performance-evidence/2026-09-15/regent-probe-results.json).
+Plan: [STS-PERFORMANCE-PLAN-2026-09-15.md](../../docs/project/STS-PERFORMANCE-PLAN-2026-09-15.md). Machine-readable task IDs RFX-1/RFX-2 and all-project ownership: [implementation-plan.json](../../docs/performance-evidence/2026-09-15/implementation-plan.json). Evidence: [regent-probe-results.json](../../docs/performance-evidence/2026-09-15/regent-probe-results.json).
 
 No product source edit, live config change, game operation, deployment, Workshop upload, commit or push was performed. Native A/B and first-consumer/memory/frame-tail verification remain explicit future gates.
 
 ## 2026-09-15 (implementation agent) RFX-1: FastBoot lifecycle repair, explicit early-order contract
 
-实现 worker 按 [STS-PERFORMANCE-PLAN-2026-09-15.md](../docs/STS-PERFORMANCE-PLAN-2026-09-15.md) RFX-1 卡片执行。**本条取代 2026-09-13 "全链路验证通过" 条目的结论**:那次运行的证据只含 queued=32 与 skip 标记,没有 warmer attach/完成标记,且其 16,144ms 与基线差值不是受控 A/B;2026-09-15 审查的结论(五份 9-14 日志全部 late activation、无 attach/completion)是当前权威评估。旧条目按规则保留不改。
+实现 worker 按 [STS-PERFORMANCE-PLAN-2026-09-15.md](../../docs/project/STS-PERFORMANCE-PLAN-2026-09-15.md) RFX-1 卡片执行。**本条取代 2026-09-13 "全链路验证通过" 条目的结论**:那次运行的证据只含 queued=32 与 skip 标记,没有 warmer attach/完成标记,且其 16,144ms 与基线差值不是受控 A/B;2026-09-15 审查的结论(五份 9-14 日志全部 late activation、无 attach/completion)是当前权威评估。旧条目按规则保留不改。
 
 ### 结构性修复(对照计划证据逐条)
 
@@ -441,7 +441,7 @@ staged : 223 strings  cb5cb518e093752c
 
 **已核实的既有记录**:
 - `.tmp/rfx2-supervision/artifacts/rel-run1.txt` 确认 `c0e149878b228f28` 是 RFX-2 实测构建(34304B,0.2.0).
-- `docs/performance-evidence/2026-09-15/GATE-1-PAYLOAD-VERIFICATION.md` 明确记录"嵌入 sha != HEAD"是
+- `../../docs/performance-evidence/2026-09-15/GATE-1-PAYLOAD-VERIFICATION.md` 明确记录"嵌入 sha != HEAD"是
   脏树/提交前移导致的**假阳性**,诚实做法是"重建后比对".
 
 **上传状态**:再次重试(03:2x)仍为 `Waiting for confirmation` -> `Timed out waiting for confirmation` -> `ERROR (Timeout)`,

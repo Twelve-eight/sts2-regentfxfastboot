@@ -42,7 +42,7 @@
 			IL_0007: ldstr "Apply"
 			IL_000c: ret
 
-			IL_000d: ldstr "Ê¹ÉúĞ§"
+			IL_000d: ldstr "ä½¿ç”Ÿæ•ˆ"
 			IL_0012: ret
 		} // end of method Text::get_ApplyButton
 
@@ -60,7 +60,7 @@
 			IL_0007: ldstr "Do not show again"
 			IL_000c: ret
 
-			IL_000d: ldstr "²»ÔÙÌáÊ¾"
+			IL_000d: ldstr "ä¸å†æç¤º"
 			IL_0012: ret
 		} // end of method Text::get_DismissButton
 
@@ -78,7 +78,7 @@
 			IL_0007: ldstr "Acceleration did not run this launch: RegentFX loaded before this mod, so its synchronous scene preload already happened and cannot be undone. This mod never reorders your mods - the order has to be set by you."
 			IL_000c: ret
 
-			IL_000d: ldstr "±¾´ÎÆô¶¯Ã»ÓĞ¼ÓËÙ£ºRegentFX ±È±¾Ä£×éÏÈ¼ÓÔØ£¬ËüµÄÍ¬²½Ô¤¼ÓÔØÒÑ¾­ÅÜÍê£¬ÎŞ·¨³·»Ø¡£±¾Ä£×é²»»áÌæÄã¸Ä¶¯Ä£×éË³Ğò£¬Ë³ĞòĞèÒªÄã×Ô¼ºÉèÖÃ¡£"
+			IL_000d: ldstr "æœ¬æ¬¡å¯åŠ¨æ²¡æœ‰åŠ é€Ÿï¼šRegentFX æ¯”æœ¬æ¨¡ç»„å…ˆåŠ è½½ï¼Œå®ƒçš„åŒæ­¥é¢„åŠ è½½å·²ç»è·‘å®Œï¼Œæ— æ³•æ’¤å›ã€‚æœ¬æ¨¡ç»„ä¸ä¼šæ›¿ä½ æ”¹åŠ¨æ¨¡ç»„é¡ºåºï¼Œé¡ºåºéœ€è¦ä½ è‡ªå·±è®¾ç½®ã€‚"
 			IL_0012: ret
 		} // end of method Text::get_Body
 
@@ -96,7 +96,7 @@
 			IL_0007: ldstr "To make the acceleration take effect:\n1. Subscribe to Load Order Manager (Workshop 3747605109)\n2. Open Modding in game and press \"Load Order\"\n3. Move RegentFXFastBoot above RegentFX, then press Apply\n4. Restart the game\nAlso: keep exactly ONE RegentFXFastBoot install (a local copy plus a workshop copy forces late order forever)."
 			IL_000c: ret
 
-			IL_000d: ldstr "Ê¹¼ÓËÙÉúĞ§µÄ²½Öè£º\n1. ¶©ÔÄ Load Order Manager£¨¹¤·» 3747605109£©\n2. ½øÓÎÏ·µÄÄ£×é½çÃæ£¬µã¡°¼ÓÔØË³Ğò¡±\n3. °Ñ RegentFXFastBoot ÒÆµ½ RegentFX ÉÏÃæ£¬µã¡°Ó¦ÓÃ¡±\n4. ÖØÆôÓÎÏ·\nÁíÍâ£º±¾Ä£×éÖ»ÄÜ×°Ò»·İ£¨±¾µØ¸±±¾ºÍ¹¤·»¸±±¾Í¬Ê±´æÔÚ»áÓÀÔ¶ÍíĞò£©¡£"
+			IL_000d: ldstr "ä½¿åŠ é€Ÿç”Ÿæ•ˆçš„æ­¥éª¤ï¼š\n1. è®¢é˜… Load Order Managerï¼ˆå·¥åŠ 3747605109ï¼‰\n2. è¿›æ¸¸æˆçš„æ¨¡ç»„ç•Œé¢ï¼Œç‚¹â€œåŠ è½½é¡ºåºâ€\n3. æŠŠ RegentFXFastBoot ç§»åˆ° RegentFX ä¸Šé¢ï¼Œç‚¹â€œåº”ç”¨â€\n4. é‡å¯æ¸¸æˆ\nå¦å¤–ï¼šæœ¬æ¨¡ç»„åªèƒ½è£…ä¸€ä»½ï¼ˆæœ¬åœ°å‰¯æœ¬å’Œå·¥åŠå‰¯æœ¬åŒæ—¶å­˜åœ¨ä¼šæ°¸è¿œæ™šåºï¼‰ã€‚"
 			IL_0012: ret
 		} // end of method Text::get_Steps
 
@@ -114,7 +114,7 @@
 			IL_0007: ldstr "The Load Order Manager Workshop page has been opened in your browser. If it did not open, search Workshop 3747605109. After subscribing, open Modding -> Load Order, move RegentFXFastBoot above RegentFX, press Apply, then restart the game."
 			IL_000c: ret
 
-			IL_000d: ldstr "ÒÑ´ò¿ª Load Order Manager µÄ¹¤·»Ò³¡£Èôä¯ÀÀÆ÷Î´´ò¿ª£¬ÇëÔÚ¹¤·»ËÑË÷ 3747605109¡£°²×°ºóÔÚÄ£×é½çÃæµã¡°¼ÓÔØË³Ğò¡±£¬°Ñ RegentFXFastBoot ÒÆµ½ RegentFX ÉÏÃæ£¬µã¡°Ó¦ÓÃ¡±£¬È»ºóÖØÆôÓÎÏ·¡£"
+			IL_000d: ldstr "å·²æ‰“å¼€ Load Order Manager çš„å·¥åŠé¡µã€‚è‹¥æµè§ˆå™¨æœªæ‰“å¼€ï¼Œè¯·åœ¨å·¥åŠæœç´¢ 3747605109ã€‚å®‰è£…ååœ¨æ¨¡ç»„ç•Œé¢ç‚¹â€œåŠ è½½é¡ºåºâ€ï¼ŒæŠŠ RegentFXFastBoot ç§»åˆ° RegentFX ä¸Šé¢ï¼Œç‚¹â€œåº”ç”¨â€ï¼Œç„¶åé‡å¯æ¸¸æˆã€‚"
 			IL_0012: ret
 		} // end of method Text::get_AppliedSteps
 

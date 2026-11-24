@@ -21,7 +21,7 @@
 [CmdletBinding()]
 param(
     [string]$LiveRoot  = 'G:\steam\steamapps\workshop\content\2868840\3799305611\RegentFXFastBoot',
-    [string]$StagedRoot = 'G:\omp works\sts2-regentfxfastboot\workshop\content\RegentFXFastBoot'
+    [string]$StagedRoot = 'G:\omp works\Sts\sts2-regentfxfastboot\workshop\content\RegentFXFastBoot'
 )
 
 $ErrorActionPreference = 'Stop'
