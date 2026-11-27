@@ -50,6 +50,6 @@
 [*][b]配合[/b]:[url=https://steamcommunity.com/sharedfiles/filedetails/?id=3747497501]RegentFX[/url](未安装则本 mod 无事可做)
 [*]v0.2.0 起不再依赖 BaseLib(经二进制核查,本 mod 的 DLL 对 BaseLib 的运行时引用为零)
 [/list]"
-	"changenote"		"v0.4.1: 适配游戏 v0.113.1, 补充预热失败回收、路径安全检查与采纳状态提示清理逻辑 (v0.4.0 起的首次公开通知与加速流程完整保留)."
+	"changenote"		"v0.4.2: 适配游戏 v0.114.0, 包含 v0.4.1 预热失败回收、路径安全检查与采纳状态提示清理逻辑 (v0.4.0 起的首次公开通知与加速流程完整保留)."
 	"publishedfileid"		"3799305611"
 }
